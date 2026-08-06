@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guicher — Hockey de Discos</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Guicher <span>Hockey de Discos</span></h1>
+      <div id="hud">
+        <span id="score">Tus rebotes: 0</span>
+        <button id="resetBtn">Reiniciar</button>
+      </div>
+    </header>
+
+    <div id="rink-wrap">
+      <canvas id="rink" width="900" height="560"></canvas>
+      <p id="hint">Haz clic y arrastra tu disco (el naranja) para agarrarlo, luego suéltalo para lanzarlo.</p>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
