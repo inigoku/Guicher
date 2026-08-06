@@ -1,16 +1,9 @@
 :root {
-  --ice-1: #cfeeff;
-  --ice-2: #a9defc;
   --wall: #1b3a63;
-  --wall-glow: #3a6ea5;
-  --line-red: #e2434a;
   --puck-player: #ff8c32;
-  --puck-player-dark: #b85f14;
-  --puck-cpu: #2f3b52;
-  --puck-cpu-dark: #171d29;
   --bg: #0c1524;
   --text: #eaf2ff;
-  --muted: #9fb3ce;
+  --muted: #bcd0ea;
 }
 
 * { box-sizing: border-box; }
@@ -18,62 +11,89 @@
 html, body {
   margin: 0;
   padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  min-height: 100%;
+  overscroll-behavior: none;
+  touch-action: none;
 }
 
-#app {
+body {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 24px 16px 40px;
-  gap: 16px;
+  justify-content: center;
 }
 
-header {
-  width: min(900px, 100%);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+#field {
+  position: relative;
+  /* JS sets exact width/height so the field is always portrait and as
+     large as possible within the viewport */
+  touch-action: none;
 }
 
-h1 {
-  margin: 0;
-  font-size: 1.6rem;
-  letter-spacing: 0.5px;
-}
-
-h1 span {
+canvas#rink {
   display: block;
-  font-size: 0.85rem;
-  font-weight: 400;
-  color: var(--muted);
-  margin-top: 2px;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  background: #cfeeff;
+}
+
+canvas#rink.grabbing {
+  cursor: grabbing;
 }
 
 #hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: max(10px, env(safe-area-inset-top)) 12px max(10px, env(safe-area-inset-bottom));
+}
+
+#topBar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
+  background: linear-gradient(to bottom, rgba(12, 21, 36, 0.55), rgba(12, 21, 36, 0));
+  padding: 6px 4px 20px;
+  border-radius: 12px;
+}
+
+#titleBlock {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+#title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.4px;
 }
 
 #score {
-  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
 }
 
 #resetBtn {
+  pointer-events: auto;
   background: var(--puck-player);
   color: #201000;
   border: none;
   border-radius: 8px;
-  padding: 8px 16px;
+  padding: 7px 14px;
   font-weight: 600;
+  font-size: 0.85rem;
   cursor: pointer;
   transition: transform 0.1s ease, background 0.15s ease;
 }
@@ -86,32 +106,38 @@ h1 span {
   transform: scale(0.96);
 }
 
-#rink-wrap {
-  width: min(900px, 100%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-canvas#rink {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 900 / 560;
-  border-radius: 18px;
-  box-shadow: 0 0 0 6px var(--wall), 0 0 30px rgba(58, 110, 165, 0.5), inset 0 0 40px rgba(0,0,0,0.15);
-  cursor: grab;
-  touch-action: none;
-  background: var(--ice-1);
-}
-
-canvas#rink.grabbing {
-  cursor: grabbing;
-}
-
 #hint {
   margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
+  align-self: center;
+  max-width: 90%;
   text-align: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: linear-gradient(to top, rgba(12, 21, 36, 0.55), rgba(12, 21, 36, 0));
+  padding: 20px 10px 6px;
+  border-radius: 12px;
+}
+
+#rotate-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--bg);
+  color: var(--text);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+/* Only force portrait on actual touch devices — desktop browser windows
+   in "landscape" just get the whole-screen field, since orientation
+   can't be locked there anyway. */
+@media (orientation: landscape) and (pointer: coarse) {
+  #rotate-overlay {
+    display: flex;
+  }
 }

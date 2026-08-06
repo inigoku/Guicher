@@ -1,25 +1,83 @@
 (() => {
+  const field = document.getElementById("field");
   const canvas = document.getElementById("rink");
   const ctx = canvas.getContext("2d");
   const scoreEl = document.getElementById("score");
   const resetBtn = document.getElementById("resetBtn");
 
-  const W = canvas.width;
-  const H = canvas.height;
-  const WALL = 20;          // playable-area inset from canvas edge
-  const PUCK_R = 24;
-  const FRICTION = 0.992;   // per-substep velocity damping
+  // Reference design width. All gameplay constants are defined relative to
+  // this and rescaled by `scale` whenever the viewport changes. The field
+  // always fills the full viewport — no letterboxing.
+  const REF_W = 540;
+
+  const BASE = {
+    wall: 18,
+    puckR: 30,
+    minSpeed: 0.02,
+    maxThrowSpeed: 30,
+  };
+
+  const FRICTION = 0.992;        // per-substep velocity damping
   const RESTITUTION_WALL = 0.85;
   const RESTITUTION_PUCK = 0.95;
-  const MIN_SPEED = 0.02;   // below this, treat as stopped
   const SUBSTEPS = 4;
 
-  const bounds = {
-    left: WALL + PUCK_R,
-    right: W - WALL - PUCK_R,
-    top: WALL + PUCK_R,
-    bottom: H - WALL - PUCK_R,
-  };
+  let W = REF_W;
+  let H = REF_W * (16 / 9);
+  let scale = 1;
+  let WALL = BASE.wall;
+  let PUCK_R = BASE.puckR;
+  let MIN_SPEED = BASE.minSpeed;
+  let MAX_THROW_SPEED = BASE.maxThrowSpeed;
+
+  const bounds = { left: 0, right: 0, top: 0, bottom: 0 };
+
+  function updateBounds() {
+    bounds.left = WALL + PUCK_R;
+    bounds.right = W - WALL - PUCK_R;
+    bounds.top = WALL + PUCK_R;
+    bounds.bottom = H - WALL - PUCK_R;
+  }
+
+  function resize() {
+    // Fill the entire viewport — no letterboxing. The field's own aspect
+    // ratio simply follows whatever the viewport's is (portrait on phones).
+    const targetW = window.innerWidth;
+    const targetH = window.innerHeight;
+
+    const newScale = targetW / REF_W;
+    const oldW = W;
+    const factor = oldW > 0 ? targetW / oldW : 1;
+
+    W = targetW;
+    H = targetH;
+    scale = newScale;
+    WALL = BASE.wall * scale;
+    PUCK_R = BASE.puckR * scale;
+    MIN_SPEED = BASE.minSpeed * scale;
+    MAX_THROW_SPEED = BASE.maxThrowSpeed * scale;
+    updateBounds();
+
+    field.style.width = `${targetW}px`;
+    field.style.height = `${targetH}px`;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(targetW * dpr);
+    canvas.height = Math.round(targetH * dpr);
+    canvas.style.width = `${targetW}px`;
+    canvas.style.height = `${targetH}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (pucks && pucks.length && factor !== 1 && oldW > 0) {
+      for (const puck of pucks) {
+        puck.x *= factor;
+        puck.y *= factor;
+        puck.vx *= factor;
+        puck.vy *= factor;
+        puck.r = PUCK_R;
+      }
+    }
+  }
 
   function makePuck(x, y, isPlayer) {
     return {
@@ -32,19 +90,21 @@
 
   function initialLayout() {
     const list = [];
-    list.push(makePuck(W / 2, H - 90, true));
+    list.push(makePuck(W / 2, H * 0.87, true));
     const cols = 3, rows = 2;
-    const startX = W / 2 - ((cols - 1) * 90) / 2;
-    const startY = 130;
+    const colGap = W * 0.24;
+    const rowGap = H * 0.075;
+    const startX = W / 2 - ((cols - 1) * colGap) / 2;
+    const startY = H * 0.16;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        list.push(makePuck(startX + c * 90, startY + r * 70, false));
+        list.push(makePuck(startX + c * colGap, startY + r * rowGap, false));
       }
     }
     return list;
   }
 
-  let pucks = initialLayout();
+  let pucks = [];
   let collisionCount = 0;
 
   function resetGame() {
@@ -59,7 +119,7 @@
   }
 
   // ---- Pointer / drag handling ----
-  let drag = null; // { puck, offsetX, offsetY, history: [{x,y,t}] }
+  let drag = null; // { puck, history: [{x,y,t}] }
 
   function canvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
@@ -112,11 +172,10 @@
       const throwScale = 16; // ms-per-frame-ish scale to turn px/ms into a nice px/frame speed
       puck.vx = ((b.x - a.x) / dt) * throwScale;
       puck.vy = ((b.y - a.y) / dt) * throwScale;
-      const maxSpeed = 26;
       const speed = Math.hypot(puck.vx, puck.vy);
-      if (speed > maxSpeed) {
-        puck.vx = (puck.vx / speed) * maxSpeed;
-        puck.vy = (puck.vy / speed) * maxSpeed;
+      if (speed > MAX_THROW_SPEED) {
+        puck.vx = (puck.vx / speed) * MAX_THROW_SPEED;
+        puck.vy = (puck.vy / speed) * MAX_THROW_SPEED;
       }
     }
     drag = null;
@@ -132,12 +191,19 @@
 
   resetBtn.addEventListener("click", resetGame);
 
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 60);
+  });
+  window.addEventListener("orientationchange", resize);
+
   function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
   }
 
   // ---- Physics ----
-  function step(dt) {
+  function step() {
     for (const puck of pucks) {
       if (puck.grabbed) continue;
 
@@ -230,19 +296,19 @@
     grad.addColorStop(0, "#dff4ff");
     grad.addColorStop(1, "#b7e2fb");
     ctx.fillStyle = grad;
-    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24);
+    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24 * scale);
     ctx.fill();
 
     ctx.save();
     ctx.strokeStyle = "#1b3a63";
     ctx.lineWidth = WALL;
-    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24);
+    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24 * scale);
     ctx.stroke();
     ctx.restore();
 
     // center line
     ctx.strokeStyle = "rgba(226, 67, 74, 0.55)";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * scale;
     ctx.beginPath();
     ctx.moveTo(WALL, H / 2);
     ctx.lineTo(W - WALL, H / 2);
@@ -250,9 +316,9 @@
 
     // center circle
     ctx.beginPath();
-    ctx.arc(W / 2, H / 2, 60, 0, Math.PI * 2);
+    ctx.arc(W / 2, H / 2, 60 * scale, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(226, 67, 74, 0.4)";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * scale;
     ctx.stroke();
   }
 
@@ -309,6 +375,8 @@
     requestAnimationFrame(loop);
   }
 
+  resize();
+  pucks = initialLayout();
   updateScore();
   requestAnimationFrame(loop);
 })();
