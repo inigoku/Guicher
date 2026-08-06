@@ -358,9 +358,64 @@
     ctx.strokeStyle = puck.grabbed ? "#fff" : "rgba(255,255,255,0.4)";
     ctx.stroke();
 
+    drawFace(puck);
+  }
+
+  function drawFace(puck) {
+    const r = puck.r;
+
+    // eyes glance slightly toward the direction the puck is moving
+    const speed = Math.hypot(puck.vx, puck.vy);
+    let lookX = 0, lookY = 0;
+    if (speed > 0.4) {
+      lookX = (puck.vx / speed) * r * 0.09;
+      lookY = (puck.vy / speed) * r * 0.09;
+    }
+
+    const eyeR = r * 0.3;
+    const pupilR = eyeR * 0.48;
+    const eyeOffsetX = r * 0.34;
+    const eyeOffsetY = r * -0.08;
+    const eyes = [
+      { x: puck.x - eyeOffsetX, y: puck.y + eyeOffsetY },
+      { x: puck.x + eyeOffsetX, y: puck.y + eyeOffsetY },
+    ];
+
+    for (const eye of eyes) {
+      ctx.beginPath();
+      ctx.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, r * 0.03);
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(eye.x + lookX, eye.y + lookY, pupilR, 0, Math.PI * 2);
+      ctx.fillStyle = "#1a1a1a";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(eye.x + lookX - pupilR * 0.35, eye.y + lookY - pupilR * 0.35, pupilR * 0.35, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+    }
+
+    // smiling mouth
     ctx.beginPath();
-    ctx.arc(puck.x, puck.y, puck.r * 0.4, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.arc(puck.x, puck.y + r * 0.32, r * 0.32, Math.PI * 0.12, Math.PI * 0.88);
+    ctx.lineWidth = Math.max(1.5, r * 0.07);
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    // rosy cheeks
+    ctx.fillStyle = puck.isPlayer ? "rgba(255,255,255,0.25)" : "rgba(255,150,150,0.3)";
+    ctx.beginPath();
+    ctx.ellipse(puck.x - eyeOffsetX * 1.05, puck.y + r * 0.3, r * 0.14, r * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(puck.x + eyeOffsetX * 1.05, puck.y + r * 0.3, r * 0.14, r * 0.09, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
