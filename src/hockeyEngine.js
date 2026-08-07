@@ -11,7 +11,6 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   const REF_W = 540;
 
   const BASE = {
-    wall: 18,
     puckR: 30,
     minSpeed: 0.02,
     maxThrowSpeed: 30,
@@ -22,10 +21,17 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   const RESTITUTION_PUCK = 0.95;
   const SUBSTEPS = 4;
 
+  // The field is a grid of cells ("ladrillos"). Two kinds for now: wall
+  // cells form a one-cell-thick ring that closes off the field, floor
+  // cells are the playable area inside that ring.
+  const GRID_COLS = 9;
+
   let W = REF_W;
   let H = REF_W * (16 / 9);
   let scale = 1;
-  let WALL = BASE.wall;
+  let cellW = 0;
+  let cellH = 0;
+  let gridRows = 0;
   let PUCK_R = BASE.puckR;
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
@@ -33,10 +39,10 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   const bounds = { left: 0, right: 0, top: 0, bottom: 0 };
 
   function updateBounds() {
-    bounds.left = WALL + PUCK_R;
-    bounds.right = W - WALL - PUCK_R;
-    bounds.top = WALL + PUCK_R;
-    bounds.bottom = H - WALL - PUCK_R;
+    bounds.left = cellW + PUCK_R;
+    bounds.right = W - cellW - PUCK_R;
+    bounds.top = cellH + PUCK_R;
+    bounds.bottom = H - cellH - PUCK_R;
   }
 
   function resize() {
@@ -52,10 +58,14 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     W = targetW;
     H = targetH;
     scale = newScale;
-    WALL = BASE.wall * scale;
     PUCK_R = BASE.puckR * scale;
     MIN_SPEED = BASE.minSpeed * scale;
     MAX_THROW_SPEED = BASE.maxThrowSpeed * scale;
+
+    cellW = W / GRID_COLS;
+    gridRows = Math.max(3, Math.round(H / cellW));
+    cellH = H / gridRows;
+
     updateBounds();
 
     field.style.width = `${targetW}px`;
@@ -288,29 +298,78 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   }
 
   // ---- Rendering ----
-  function drawRink() {
+  // The field itself is a grid of cells: a one-cell wall ring closes it
+  // off, and floor cells fill the playable area inside that ring.
+  function drawWallCell(row, col) {
+    const x = col * cellW;
+    const y = row * cellH;
+    const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
+    grad.addColorStop(0, "#2a5085");
+    grad.addColorStop(1, "#132844");
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, cellW, cellH);
+
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.beginPath();
+    ctx.moveTo(x + 1, y + cellH - 1);
+    ctx.lineTo(x + 1, y + 1);
+    ctx.lineTo(x + cellW - 1, y + 1);
+    ctx.stroke();
+  }
+
+  function drawField() {
     ctx.clearRect(0, 0, W, H);
 
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    const floorLeft = cellW;
+    const floorTop = cellH;
+    const floorRight = W - cellW;
+    const floorBottom = H - cellH;
+
+    // floor cells — one continuous ice sheet with tile seams
+    const grad = ctx.createLinearGradient(0, floorTop, 0, floorBottom);
     grad.addColorStop(0, "#dff4ff");
     grad.addColorStop(1, "#b7e2fb");
     ctx.fillStyle = grad;
-    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24 * scale);
-    ctx.fill();
+    ctx.fillRect(floorLeft, floorTop, floorRight - floorLeft, floorBottom - floorTop);
 
-    ctx.save();
-    ctx.strokeStyle = "#1b3a63";
-    ctx.lineWidth = WALL;
-    roundRect(ctx, WALL / 2, WALL / 2, W - WALL, H - WALL, 24 * scale);
-    ctx.stroke();
-    ctx.restore();
+    ctx.strokeStyle = "rgba(27, 58, 99, 0.08)";
+    ctx.lineWidth = Math.max(1, scale);
+    for (let col = 1; col < GRID_COLS - 1; col++) {
+      const x = col * cellW;
+      ctx.beginPath();
+      ctx.moveTo(x, floorTop);
+      ctx.lineTo(x, floorBottom);
+      ctx.stroke();
+    }
+    for (let row = 1; row < gridRows - 1; row++) {
+      const y = row * cellH;
+      ctx.beginPath();
+      ctx.moveTo(floorLeft, y);
+      ctx.lineTo(floorRight, y);
+      ctx.stroke();
+    }
+
+    // wall cells — the ring that closes off the field
+    for (let col = 0; col < GRID_COLS; col++) {
+      drawWallCell(0, col);
+      drawWallCell(gridRows - 1, col);
+    }
+    for (let row = 1; row < gridRows - 1; row++) {
+      drawWallCell(row, 0);
+      drawWallCell(row, GRID_COLS - 1);
+    }
 
     // center line
     ctx.strokeStyle = "rgba(226, 67, 74, 0.55)";
     ctx.lineWidth = 3 * scale;
     ctx.beginPath();
-    ctx.moveTo(WALL, H / 2);
-    ctx.lineTo(W - WALL, H / 2);
+    ctx.moveTo(floorLeft, H / 2);
+    ctx.lineTo(floorRight, H / 2);
     ctx.stroke();
 
     // center circle
@@ -319,16 +378,6 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     ctx.strokeStyle = "rgba(226, 67, 74, 0.4)";
     ctx.lineWidth = 2 * scale;
     ctx.stroke();
-  }
-
-  function roundRect(c, x, y, w, h, r) {
-    c.beginPath();
-    c.moveTo(x + r, y);
-    c.arcTo(x + w, y, x + w, y + h, r);
-    c.arcTo(x + w, y + h, x, y + h, r);
-    c.arcTo(x, y + h, x, y, r);
-    c.arcTo(x, y, x + w, y, r);
-    c.closePath();
   }
 
   function drawPuck(puck) {
@@ -419,7 +468,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   }
 
   function render() {
-    drawRink();
+    drawField();
     for (const puck of pucks) drawPuck(puck);
   }
 
