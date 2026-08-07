@@ -279,19 +279,26 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     const minDist = a.r + b.r;
     if (dist === 0 || dist >= minDist) return;
 
-    // The player's puck destroys whatever it hits on contact — no bounce,
-    // just an explosion and removal. Non-player pucks still bounce off
-    // each other normally.
+    // The player's puck destroys whatever it hits on contact — it still
+    // bounces back off the impact like it hit something solid, but the
+    // target explodes and is removed instead of bouncing itself.
+    // Non-player pucks still bounce off each other normally.
     if (a.isPlayer !== b.isPlayer) {
       const target = a.isPlayer ? b : a;
       const impactor = a.isPlayer ? a : b;
       if (!toRemove.has(target)) {
         toRemove.add(target);
         spawnExplosion(target.x, target.y, target.r);
-        impactor.vx *= 0.9;
-        impactor.vy *= 0.9;
         collisionCount++;
         updateScore();
+      }
+
+      const nix = (impactor.x - target.x) / dist;
+      const niy = (impactor.y - target.y) / dist;
+      const closingSpeed = impactor.vx * nix + impactor.vy * niy;
+      if (closingSpeed < 0) {
+        impactor.vx -= (1 + RESTITUTION_PUCK) * closingSpeed * nix;
+        impactor.vy -= (1 + RESTITUTION_PUCK) * closingSpeed * niy;
       }
       return;
     }
