@@ -115,10 +115,13 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   }
 
   let pucks = [];
+  let explosions = [];
   let collisionCount = 0;
+  let toRemove = new Set();
 
   function resetGame() {
     pucks = initialLayout();
+    explosions = [];
     collisionCount = 0;
     drag = null;
     updateScore();
@@ -213,6 +216,8 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
 
   // ---- Physics ----
   function step() {
+    toRemove = new Set();
+
     for (const puck of pucks) {
       if (puck.grabbed) continue;
 
@@ -247,6 +252,24 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
         resolveCollision(pucks[i], pucks[j]);
       }
     }
+
+    if (toRemove.size) {
+      pucks = pucks.filter((p) => !toRemove.has(p));
+    }
+  }
+
+  function spawnExplosion(x, y, r) {
+    const count = 10;
+    const particles = [];
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+      particles.push({
+        angle,
+        speed: (0.6 + Math.random() * 1.4) * scale,
+        size: r * (0.18 + Math.random() * 0.18),
+      });
+    }
+    explosions.push({ x, y, r, t: 0, duration: 24, particles });
   }
 
   function resolveCollision(a, b) {
@@ -255,6 +278,23 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     const dist = Math.hypot(dx, dy);
     const minDist = a.r + b.r;
     if (dist === 0 || dist >= minDist) return;
+
+    // The player's puck destroys whatever it hits on contact — no bounce,
+    // just an explosion and removal. Non-player pucks still bounce off
+    // each other normally.
+    if (a.isPlayer !== b.isPlayer) {
+      const target = a.isPlayer ? b : a;
+      const impactor = a.isPlayer ? a : b;
+      if (!toRemove.has(target)) {
+        toRemove.add(target);
+        spawnExplosion(target.x, target.y, target.r);
+        impactor.vx *= 0.9;
+        impactor.vy *= 0.9;
+        collisionCount++;
+        updateScore();
+      }
+      return;
+    }
 
     const nx = dx / dist;
     const ny = dy / dist;
@@ -467,9 +507,43 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     ctx.fill();
   }
 
+  function updateExplosions() {
+    for (let i = explosions.length - 1; i >= 0; i--) {
+      explosions[i].t++;
+      if (explosions[i].t > explosions[i].duration) explosions.splice(i, 1);
+    }
+  }
+
+  function drawExplosions() {
+    for (const ex of explosions) {
+      const progress = ex.t / ex.duration;
+      const alpha = 1 - progress;
+
+      ctx.beginPath();
+      ctx.arc(ex.x, ex.y, ex.r * (1 + progress * 1.5), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,180,60,${alpha * 0.8})`;
+      ctx.lineWidth = Math.max(1, 3 * scale * (1 - progress));
+      ctx.stroke();
+
+      for (const p of ex.particles) {
+        const dist = p.speed * ex.t;
+        const px = ex.x + Math.cos(p.angle) * dist;
+        const py = ex.y + Math.sin(p.angle) * dist;
+        const size = Math.max(0, p.size * (1 - progress));
+        if (size <= 0) continue;
+        ctx.beginPath();
+        ctx.arc(px, py, size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,140,40,${alpha})`;
+        ctx.fill();
+      }
+    }
+  }
+
   function render() {
     drawField();
     for (const puck of pucks) drawPuck(puck);
+    updateExplosions();
+    drawExplosions();
   }
 
   let rafId = null;
