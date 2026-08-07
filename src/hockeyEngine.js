@@ -2,7 +2,15 @@
 // Deliberately framework-agnostic — the game loop is imperative and runs
 // outside React's render cycle. A component mounts it via createHockeyEngine
 // and must call destroy() on unmount.
-export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange }) {
+export function createHockeyEngine({
+  canvas,
+  field,
+  onScoreChange,
+  onGrabChange,
+  onHpChange,
+  onTurnChange,
+  onGameOver,
+}) {
   const ctx = canvas.getContext("2d");
 
   // Reference design width. All gameplay constants are defined relative to
@@ -14,6 +22,11 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     puckR: 30,
     minSpeed: 0.02,
     maxThrowSpeed: 30,
+    // Threshold used to decide a puck has "settled" for turn-advancement
+    // purposes. Much larger than minSpeed on purpose — waiting for pucks to
+    // decay all the way to a full stop under the ice-like low friction
+    // would make each turn take several seconds.
+    settleSpeed: 1.6,
   };
 
   const FRICTION = 0.992; // per-substep velocity damping
@@ -40,6 +53,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   let PUCK_R = BASE.puckR;
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
+  let SETTLE_SPEED = BASE.settleSpeed;
 
   const bounds = { left: 0, right: 0, top: 0, bottom: 0 };
 
@@ -85,6 +99,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     PUCK_R = BASE.puckR * scale;
     MIN_SPEED = BASE.minSpeed * scale;
     MAX_THROW_SPEED = BASE.maxThrowSpeed * scale;
+    SETTLE_SPEED = BASE.settleSpeed * scale;
 
     cellW = W / GRID_COLS;
     gridRows = Math.max(3, Math.round(H / cellW));
@@ -114,11 +129,15 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     }
   }
 
+  const PLAYER_START_HP = 3;
+  const ENEMY_START_HP = 1;
+
   function makePuck(x, y, isPlayer) {
     return {
       x, y, vx: 0, vy: 0,
       r: PUCK_R,
       isPlayer: !!isPlayer,
+      hp: isPlayer ? PLAYER_START_HP : ENEMY_START_HP,
       grabbed: false,
     };
   }
@@ -144,16 +163,87 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   let collisionCount = 0;
   let toRemove = new Set();
 
+  // ---- Turn-based battle state ----
+  // "player": waiting for (or resolving) the player's own throw.
+  // "enemy": the enemy phase — enemies move one at a time from enemyQueue.
+  let turn = "player";
+  let inputLocked = false; // true while a throw/impulse is still settling
+  let enemyQueue = [];
+  let playerHitThisEnemyMove = false; // caps each enemy's move to one hit
+  let gameOver = null; // null | "win" | "lose"
+
   function resetGame() {
     pucks = initialLayout();
     explosions = [];
     collisionCount = 0;
     drag = null;
+    turn = "player";
+    inputLocked = false;
+    enemyQueue = [];
+    playerHitThisEnemyMove = false;
+    gameOver = null;
     updateScore();
+    onHpChange(PLAYER_START_HP);
+    onTurnChange("player");
+    onGameOver(null);
   }
 
   function updateScore() {
     onScoreChange(collisionCount);
+  }
+
+  function endGame(result) {
+    if (gameOver) return;
+    gameOver = result;
+    inputLocked = true;
+    onGameOver(result);
+  }
+
+  function takeNextEnemyTurn() {
+    while (enemyQueue.length && !pucks.includes(enemyQueue[0])) enemyQueue.shift();
+
+    if (enemyQueue.length === 0) {
+      if (!pucks.some((p) => !p.isPlayer)) {
+        endGame("win");
+        return;
+      }
+      turn = "player";
+      inputLocked = false;
+      onTurnChange("player");
+      return;
+    }
+
+    const enemy = enemyQueue.shift();
+    playerHitThisEnemyMove = false;
+
+    // Placeholder AI: a random impulse in a random direction.
+    const angle = Math.random() * Math.PI * 2;
+    const speed = MAX_THROW_SPEED * (0.35 + Math.random() * 0.5);
+    enemy.vx = Math.cos(angle) * speed;
+    enemy.vy = Math.sin(angle) * speed;
+  }
+
+  function advanceTurn() {
+    if (gameOver) return;
+    if (turn === "player") {
+      if (!pucks.some((p) => !p.isPlayer)) {
+        endGame("win");
+        return;
+      }
+      turn = "enemy";
+      onTurnChange("enemy");
+      enemyQueue = pucks.filter((p) => !p.isPlayer);
+      takeNextEnemyTurn();
+    } else {
+      takeNextEnemyTurn();
+    }
+  }
+
+  function allSettled() {
+    return (
+      explosions.length === 0 &&
+      pucks.every((p) => !p.grabbed && Math.hypot(p.vx, p.vy) < SETTLE_SPEED)
+    );
   }
 
   // ---- Pointer / drag handling ----
@@ -172,6 +262,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   }
 
   function pointerDown(evt) {
+    if (turn !== "player" || inputLocked || gameOver) return;
     const p = canvasPoint(evt);
     const player = pucks.find((pk) => pk.isPlayer);
     if (!player) return;
@@ -218,6 +309,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     }
     drag = null;
     onGrabChange(false);
+    inputLocked = true;
   }
 
   canvas.addEventListener("mousedown", pointerDown);
@@ -343,28 +435,47 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     const minDist = a.r + b.r;
     if (dist === 0 || dist >= minDist) return;
 
-    // The player's puck destroys whatever it hits on contact — it still
-    // bounces back off the impact like it hit something solid, but the
-    // target explodes and is removed instead of bouncing itself.
-    // Non-player pucks still bounce off each other normally.
+    // Combat: on the player's turn, the player's puck deals damage and
+    // bounces back off the impact instead of bouncing normally. On the
+    // enemy turn, the moving enemy deals one hit of damage to the player
+    // and then both bounce off each other like a normal collision — an
+    // enemy hitting another enemy never deals damage either way.
     if (a.isPlayer !== b.isPlayer) {
-      const target = a.isPlayer ? b : a;
-      const impactor = a.isPlayer ? a : b;
-      if (!toRemove.has(target)) {
-        toRemove.add(target);
-        spawnExplosion(target.x, target.y, target.r);
-        collisionCount++;
-        updateScore();
+      const enemy = a.isPlayer ? b : a;
+      const playerPuck = a.isPlayer ? a : b;
+
+      if (turn === "player") {
+        if (!toRemove.has(enemy)) {
+          enemy.hp -= 1;
+          if (enemy.hp <= 0) {
+            toRemove.add(enemy);
+            spawnExplosion(enemy.x, enemy.y, enemy.r);
+          }
+          collisionCount++;
+          updateScore();
+        }
+
+        const nix = (playerPuck.x - enemy.x) / dist;
+        const niy = (playerPuck.y - enemy.y) / dist;
+        const closingSpeed = playerPuck.vx * nix + playerPuck.vy * niy;
+        if (closingSpeed < 0) {
+          playerPuck.vx -= (1 + RESTITUTION_PUCK) * closingSpeed * nix;
+          playerPuck.vy -= (1 + RESTITUTION_PUCK) * closingSpeed * niy;
+        }
+        return;
       }
 
-      const nix = (impactor.x - target.x) / dist;
-      const niy = (impactor.y - target.y) / dist;
-      const closingSpeed = impactor.vx * nix + impactor.vy * niy;
-      if (closingSpeed < 0) {
-        impactor.vx -= (1 + RESTITUTION_PUCK) * closingSpeed * nix;
-        impactor.vy -= (1 + RESTITUTION_PUCK) * closingSpeed * niy;
+      if (!playerHitThisEnemyMove && !toRemove.has(playerPuck)) {
+        playerHitThisEnemyMove = true;
+        playerPuck.hp -= 1;
+        onHpChange(Math.max(0, playerPuck.hp));
+        if (playerPuck.hp <= 0) {
+          toRemove.add(playerPuck);
+          spawnExplosion(playerPuck.x, playerPuck.y, playerPuck.r);
+          endGame("lose");
+        }
       }
-      return;
+      // fall through to the normal elastic bounce below
     }
 
     const nx = dx / dist;
@@ -611,12 +722,12 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     if (!running) return;
     for (let i = 0; i < SUBSTEPS; i++) step();
     render();
+    if (inputLocked && !gameOver && allSettled()) advanceTurn();
     rafId = requestAnimationFrame(loop);
   }
 
   resize();
-  pucks = initialLayout();
-  updateScore();
+  resetGame();
   rafId = requestAnimationFrame(loop);
 
   function destroy() {

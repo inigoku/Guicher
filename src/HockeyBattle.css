@@ -56,6 +56,36 @@ canvas#rink.grabbing {
   font-variant-numeric: tabular-nums;
 }
 
+#statusBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+#hp {
+  font-size: 1rem;
+  letter-spacing: 2px;
+}
+
+.turnBadge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.turnBadge.player {
+  background: rgba(255, 140, 50, 0.25);
+  color: var(--puck-player);
+}
+
+.turnBadge.enemy {
+  background: rgba(160, 175, 200, 0.2);
+  color: var(--muted);
+}
+
 #resetBtn {
   pointer-events: auto;
   background: var(--puck-player);
@@ -111,4 +141,47 @@ canvas#rink.grabbing {
   #rotate-overlay {
     display: flex;
   }
+}
+
+#gameOverOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 21, 36, 0.72);
+}
+
+#gameOverCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 28px 36px;
+  border-radius: 16px;
+  background: rgba(20, 34, 56, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+#gameOverTitle {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+#gameOverCard button {
+  pointer-events: auto;
+  background: var(--puck-player);
+  color: #201000;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+#gameOverCard button:hover {
+  background: #ffa552;
 }
