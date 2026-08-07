@@ -4,28 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <title>Guicher — Hockey de Discos</title>
-<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="rotate-overlay">
-    <p>📱 Gira tu dispositivo<br>Guicher se juega en modo vertical.</p>
-  </div>
-
-  <div id="field">
-    <canvas id="rink"></canvas>
-
-    <div id="hud">
-      <div id="topBar">
-        <div id="titleBlock">
-          <span id="title">Guicher</span>
-          <span id="score">Rebotes: 0</span>
-        </div>
-        <button id="resetBtn">Reiniciar</button>
-      </div>
-      <p id="hint">Arrastra tu disco (naranja) para agarrarlo y suéltalo para lanzarlo.</p>
-    </div>
-  </div>
-
-  <script src="game.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

@@ -1,32 +1,3 @@
-:root {
-  --wall: #1b3a63;
-  --puck-player: #ff8c32;
-  --bg: #0c1524;
-  --text: #eaf2ff;
-  --muted: #bcd0ea;
-}
-
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  overscroll-behavior: none;
-  touch-action: none;
-}
-
-body {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 #field {
   position: relative;
   /* JS sets exact width/height so the field is always portrait and as

@@ -1,9 +1,9 @@
-(() => {
-  const field = document.getElementById("field");
-  const canvas = document.getElementById("rink");
+// Vanilla canvas physics engine for the hockey battle mini-game.
+// Deliberately framework-agnostic — the game loop is imperative and runs
+// outside React's render cycle. A component mounts it via createHockeyEngine
+// and must call destroy() on unmount.
+export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange }) {
   const ctx = canvas.getContext("2d");
-  const scoreEl = document.getElementById("score");
-  const resetBtn = document.getElementById("resetBtn");
 
   // Reference design width. All gameplay constants are defined relative to
   // this and rescaled by `scale` whenever the viewport changes. The field
@@ -17,7 +17,7 @@
     maxThrowSpeed: 30,
   };
 
-  const FRICTION = 0.992;        // per-substep velocity damping
+  const FRICTION = 0.992; // per-substep velocity damping
   const RESTITUTION_WALL = 0.85;
   const RESTITUTION_PUCK = 0.95;
   const SUBSTEPS = 4;
@@ -115,7 +115,7 @@
   }
 
   function updateScore() {
-    scoreEl.textContent = `Rebotes: ${collisionCount}`;
+    onScoreChange(collisionCount);
   }
 
   // ---- Pointer / drag handling ----
@@ -144,7 +144,7 @@
       player.grabbed = true;
       player.vx = 0;
       player.vy = 0;
-      canvas.classList.add("grabbing");
+      onGrabChange(true);
       evt.preventDefault();
     }
   }
@@ -179,7 +179,7 @@
       }
     }
     drag = null;
-    canvas.classList.remove("grabbing");
+    onGrabChange(false);
   }
 
   canvas.addEventListener("mousedown", pointerDown);
@@ -189,13 +189,12 @@
   window.addEventListener("touchmove", pointerMove, { passive: false });
   window.addEventListener("touchend", pointerUp);
 
-  resetBtn.addEventListener("click", resetGame);
-
   let resizeTimer = null;
-  window.addEventListener("resize", () => {
+  function onResize() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(resize, 60);
-  });
+  }
+  window.addEventListener("resize", onResize);
   window.addEventListener("orientationchange", resize);
 
   function clamp(v, lo, hi) {
@@ -424,14 +423,33 @@
     for (const puck of pucks) drawPuck(puck);
   }
 
+  let rafId = null;
+  let running = true;
   function loop() {
+    if (!running) return;
     for (let i = 0; i < SUBSTEPS; i++) step();
     render();
-    requestAnimationFrame(loop);
+    rafId = requestAnimationFrame(loop);
   }
 
   resize();
   pucks = initialLayout();
   updateScore();
-  requestAnimationFrame(loop);
-})();
+  rafId = requestAnimationFrame(loop);
+
+  function destroy() {
+    running = false;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    clearTimeout(resizeTimer);
+    canvas.removeEventListener("mousedown", pointerDown);
+    window.removeEventListener("mousemove", pointerMove);
+    window.removeEventListener("mouseup", pointerUp);
+    canvas.removeEventListener("touchstart", pointerDown);
+    window.removeEventListener("touchmove", pointerMove);
+    window.removeEventListener("touchend", pointerUp);
+    window.removeEventListener("resize", onResize);
+    window.removeEventListener("orientationchange", resize);
+  }
+
+  return { reset: resetGame, destroy };
+}
