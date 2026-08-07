@@ -23,8 +23,10 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
 
   // The field is a grid of cells ("ladrillos"). Two kinds for now: wall
   // cells form a one-cell-thick ring that closes off the field, floor
-  // cells are the playable area inside that ring.
+  // cells are the playable area inside that ring. A mid-field wall (also
+  // made of wall cells) splits the field with a gap pucks can pass through.
   const GRID_COLS = 9;
+  const MID_WALL_GAP = 3;
 
   let W = REF_W;
   let H = REF_W * (16 / 9);
@@ -32,6 +34,9 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
   let cellW = 0;
   let cellH = 0;
   let gridRows = 0;
+  let midWallRow = 0;
+  let midWallCols = [];
+  let midWallRects = [];
   let PUCK_R = BASE.puckR;
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
@@ -43,6 +48,25 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     bounds.right = W - cellW - PUCK_R;
     bounds.top = cellH + PUCK_R;
     bounds.bottom = H - cellH - PUCK_R;
+  }
+
+  function buildMidWall() {
+    midWallRow = Math.floor(gridRows / 2);
+    const playableCols = GRID_COLS - 2; // excludes the border wall columns
+    const gapStart = 1 + Math.floor((playableCols - MID_WALL_GAP) / 2);
+    const gapEnd = gapStart + MID_WALL_GAP - 1;
+
+    midWallCols = [];
+    for (let col = 1; col < GRID_COLS - 1; col++) {
+      if (col < gapStart || col > gapEnd) midWallCols.push(col);
+    }
+
+    midWallRects = midWallCols.map((col) => ({
+      x: col * cellW,
+      y: midWallRow * cellH,
+      w: cellW,
+      h: cellH,
+    }));
   }
 
   function resize() {
@@ -66,6 +90,7 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     gridRows = Math.max(3, Math.round(H / cellW));
     cellH = H / gridRows;
 
+    buildMidWall();
     updateBounds();
 
     field.style.width = `${targetW}px`;
@@ -214,6 +239,43 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
     return Math.max(lo, Math.min(hi, v));
   }
 
+  function resolveWallCellCollision(puck, rect) {
+    const closestX = clamp(puck.x, rect.x, rect.x + rect.w);
+    const closestY = clamp(puck.y, rect.y, rect.y + rect.h);
+    const dx = puck.x - closestX;
+    const dy = puck.y - closestY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq >= puck.r * puck.r) return;
+
+    let nx, ny, penetration;
+    const dist = Math.sqrt(distSq);
+    if (dist > 0) {
+      nx = dx / dist;
+      ny = dy / dist;
+      penetration = puck.r - dist;
+    } else {
+      // Center is inside the rect (fast-moving puck tunneled in) — push
+      // out along whichever axis needs the least travel.
+      const left = puck.x - rect.x;
+      const right = rect.x + rect.w - puck.x;
+      const top = puck.y - rect.y;
+      const bottom = rect.y + rect.h - puck.y;
+      const min = Math.min(left, right, top, bottom);
+      nx = min === left ? -1 : min === right ? 1 : 0;
+      ny = min === top ? -1 : min === bottom ? 1 : 0;
+      penetration = puck.r + min;
+    }
+
+    puck.x += nx * penetration;
+    puck.y += ny * penetration;
+
+    const vDotN = puck.vx * nx + puck.vy * ny;
+    if (vDotN < 0) {
+      puck.vx -= (1 + RESTITUTION_WALL) * vDotN * nx;
+      puck.vy -= (1 + RESTITUTION_WALL) * vDotN * ny;
+    }
+  }
+
   // ---- Physics ----
   function step() {
     toRemove = new Set();
@@ -244,6 +306,8 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
         puck.y = bounds.bottom;
         puck.vy = -Math.abs(puck.vy) * RESTITUTION_WALL;
       }
+
+      for (const rect of midWallRects) resolveWallCellCollision(puck, rect);
     }
 
     // puck-puck collisions
@@ -411,20 +475,8 @@ export function createHockeyEngine({ canvas, field, onScoreChange, onGrabChange 
       drawWallCell(row, GRID_COLS - 1);
     }
 
-    // center line
-    ctx.strokeStyle = "rgba(226, 67, 74, 0.55)";
-    ctx.lineWidth = 3 * scale;
-    ctx.beginPath();
-    ctx.moveTo(floorLeft, H / 2);
-    ctx.lineTo(floorRight, H / 2);
-    ctx.stroke();
-
-    // center circle
-    ctx.beginPath();
-    ctx.arc(W / 2, H / 2, 60 * scale, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(226, 67, 74, 0.4)";
-    ctx.lineWidth = 2 * scale;
-    ctx.stroke();
+    // mid-field wall — same wall cells, with a gap pucks can pass through
+    for (const col of midWallCols) drawWallCell(midWallRow, col);
   }
 
   function drawPuck(puck) {
