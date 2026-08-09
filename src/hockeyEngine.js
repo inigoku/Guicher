@@ -57,6 +57,7 @@ export function createHockeyEngine({
   let midWallRow = 0;
   let midWallCols = [];
   let midWallRects = [];
+  let floorTintMap = [];
   let PUCK_R = BASE.puckR;
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
@@ -91,6 +92,18 @@ export function createHockeyEngine({
     }));
   }
 
+  // Randomized once (not per-frame, or the mottling would flicker) whenever
+  // the grid is (re)built, so each floor tile gets a stable random tint.
+  function buildFloorTintMap() {
+    floorTintMap = [];
+    for (let row = 0; row < gridRows; row++) {
+      floorTintMap[row] = [];
+      for (let col = 0; col < GRID_COLS; col++) {
+        floorTintMap[row][col] = Math.floor(Math.random() * FLOOR_TINTS.length);
+      }
+    }
+  }
+
   function resize() {
     // Fill the entire viewport — no letterboxing. The field's own aspect
     // ratio simply follows whatever the viewport's is (portrait on phones).
@@ -115,6 +128,7 @@ export function createHockeyEngine({
     cellH = H / gridRows;
 
     buildMidWall();
+    buildFloorTintMap();
     updateBounds();
 
     field.style.width = `${targetW}px`;
@@ -600,7 +614,7 @@ export function createHockeyEngine({
     const cx = col * cellW + cellW / 2;
     const cy = row * cellH + cellH / 2;
     const r = Math.max(cellW, cellH) * 0.95;
-    const tint = FLOOR_TINTS[(row * 11 + col * 17) % FLOOR_TINTS.length];
+    const tint = FLOOR_TINTS[floorTintMap[row]?.[col] ?? 0];
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     grad.addColorStop(0, tint);
     grad.addColorStop(1, "rgba(0,0,0,0)");
