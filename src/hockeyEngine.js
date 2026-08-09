@@ -13,6 +13,14 @@ export function createHockeyEngine({
 }) {
   const ctx = canvas.getContext("2d");
 
+  // The floor is pre-rendered to this offscreen layer and then composited
+  // with a blur each frame, so the stone slabs read as soft/diffused
+  // against the crisp-edged walls — cheaper than blurring ~100 individual
+  // cell shapes on the main canvas every frame.
+  const floorLayer = document.createElement("canvas");
+  const floorCtx = floorLayer.getContext("2d");
+  let dpr = 1;
+
   // Reference design width. All gameplay constants are defined relative to
   // this and rescaled by `scale` whenever the viewport changes. The field
   // always fills the full viewport — no letterboxing.
@@ -120,12 +128,17 @@ export function createHockeyEngine({
     field.style.width = `${targetW}px`;
     field.style.height = `${targetH}px`;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.round(targetW * dpr);
     canvas.height = Math.round(targetH * dpr);
     canvas.style.width = `${targetW}px`;
     canvas.style.height = `${targetH}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    floorLayer.width = canvas.width;
+    floorLayer.height = canvas.height;
+    floorCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderFloorLayer();
 
     if (pucks && pucks.length && factor !== 1 && oldW > 0) {
       for (const puck of pucks) {
@@ -596,26 +609,35 @@ export function createHockeyEngine({
     ["#928d84", "#69655d"],
   ];
 
-  function drawFloorCell(row, col) {
+  function drawFloorCell(fctx, row, col) {
     const x = col * cellW;
     const y = row * cellH;
     const [top, bottom] = STONE_PALETTES[(row * 11 + col * 17) % STONE_PALETTES.length];
-    const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
+    const grad = fctx.createLinearGradient(x, y, x + cellW, y + cellH);
     grad.addColorStop(0, top);
     grad.addColorStop(1, bottom);
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, cellW, cellH);
+    fctx.fillStyle = grad;
+    fctx.fillRect(x, y, cellW, cellH);
 
-    ctx.strokeStyle = "rgba(20, 18, 15, 0.28)";
-    ctx.lineWidth = Math.max(1, scale);
-    ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+    fctx.strokeStyle = "rgba(20, 18, 15, 0.28)";
+    fctx.lineWidth = Math.max(1, scale);
+    fctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.beginPath();
-    ctx.moveTo(x + 1, y + cellH - 1);
-    ctx.lineTo(x + 1, y + 1);
-    ctx.lineTo(x + cellW - 1, y + 1);
-    ctx.stroke();
+    fctx.strokeStyle = "rgba(255,255,255,0.08)";
+    fctx.beginPath();
+    fctx.moveTo(x + 1, y + cellH - 1);
+    fctx.lineTo(x + 1, y + 1);
+    fctx.lineTo(x + cellW - 1, y + 1);
+    fctx.stroke();
+  }
+
+  function renderFloorLayer() {
+    floorCtx.clearRect(0, 0, W, H);
+    for (let row = 1; row < gridRows - 1; row++) {
+      for (let col = 1; col < GRID_COLS - 1; col++) {
+        drawFloorCell(floorCtx, row, col);
+      }
+    }
   }
 
   // A torch mounted on the inner face of a border wall cell. `dir` is +1 on
@@ -678,12 +700,13 @@ export function createHockeyEngine({
   function drawField() {
     ctx.clearRect(0, 0, W, H);
 
-    // floor — individual stone slabs rather than one flat sheet
-    for (let row = 1; row < gridRows - 1; row++) {
-      for (let col = 1; col < GRID_COLS - 1; col++) {
-        drawFloorCell(row, col);
-      }
-    }
+    // floor — pre-rendered stone slabs, composited with a blur so they
+    // read as soft/diffused next to the crisp-edged walls
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = `blur(${Math.max(2, cellW * dpr * 0.12)}px)`;
+    ctx.drawImage(floorLayer, 0, 0);
+    ctx.restore();
 
     // wall cells — the ring that closes off the field
     for (let col = 0; col < GRID_COLS; col++) {
