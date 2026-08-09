@@ -589,6 +589,26 @@ export function createHockeyEngine({
     ctx.stroke();
   }
 
+  const FLOOR_TINTS = [
+    "rgba(255,255,255,0.14)",
+    "rgba(0,0,0,0.16)",
+    "rgba(120,108,90,0.14)",
+    "rgba(0,0,0,0.08)",
+  ];
+
+  function drawFloorTint(row, col) {
+    const cx = col * cellW + cellW / 2;
+    const cy = row * cellH + cellH / 2;
+    const r = Math.max(cellW, cellH) * 0.95;
+    const tint = FLOOR_TINTS[(row * 11 + col * 17) % FLOOR_TINTS.length];
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    grad.addColorStop(0, tint);
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   // A torch mounted on the inner face of a border wall cell. `dir` is +1 on
   // the left wall (flame reaches rightward into the floor) or -1 on the
@@ -650,8 +670,10 @@ export function createHockeyEngine({
   function drawField() {
     ctx.clearRect(0, 0, W, H);
 
-    // floor — one smooth stone gradient, no per-slab borders, so it stays
-    // clearly softer/plainer than the crisp-edged brick walls
+    // floor — a base stone gradient with soft per-tile mottling on top.
+    // Each tile is a radial gradient fading all the way to transparent, so
+    // it blends into its neighbors by construction — no hard seam is ever
+    // drawn, unlike the walls' crisp bordered bricks.
     const floorTop = cellH;
     const floorBottom = H - cellH;
     const floorGrad = ctx.createLinearGradient(0, floorTop, 0, floorBottom);
@@ -659,6 +681,12 @@ export function createHockeyEngine({
     floorGrad.addColorStop(1, "#6e6a62");
     ctx.fillStyle = floorGrad;
     ctx.fillRect(cellW, floorTop, W - cellW * 2, floorBottom - floorTop);
+
+    for (let row = 1; row < gridRows - 1; row++) {
+      for (let col = 1; col < GRID_COLS - 1; col++) {
+        drawFloorTint(row, col);
+      }
+    }
 
     // wall cells — the ring that closes off the field
     for (let col = 0; col < GRID_COLS; col++) {
