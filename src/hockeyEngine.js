@@ -27,6 +27,9 @@ export function createHockeyEngine({
     // decay all the way to a full stop under the ice-like low friction
     // would make each turn take several seconds.
     settleSpeed: 1.6,
+    // How far the player's puck can be dragged from where it started this
+    // turn — a small aiming leash rather than free repositioning.
+    leashRadius: 90,
   };
 
   const FRICTION = 0.992; // per-substep velocity damping
@@ -54,6 +57,7 @@ export function createHockeyEngine({
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
   let SETTLE_SPEED = BASE.settleSpeed;
+  let LEASH_RADIUS = BASE.leashRadius;
 
   const bounds = { left: 0, right: 0, top: 0, bottom: 0 };
 
@@ -100,6 +104,7 @@ export function createHockeyEngine({
     MIN_SPEED = BASE.minSpeed * scale;
     MAX_THROW_SPEED = BASE.maxThrowSpeed * scale;
     SETTLE_SPEED = BASE.settleSpeed * scale;
+    LEASH_RADIUS = BASE.leashRadius * scale;
 
     cellW = W / GRID_COLS;
     gridRows = Math.max(3, Math.round(H / cellW));
@@ -269,7 +274,12 @@ export function createHockeyEngine({
     const dx = p.x - player.x;
     const dy = p.y - player.y;
     if (Math.hypot(dx, dy) <= player.r * 1.4) {
-      drag = { puck: player, history: [{ x: p.x, y: p.y, t: performance.now() }] };
+      drag = {
+        puck: player,
+        anchorX: player.x,
+        anchorY: player.y,
+        history: [{ x: p.x, y: p.y, t: performance.now() }],
+      };
       player.grabbed = true;
       player.vx = 0;
       player.vy = 0;
@@ -282,8 +292,20 @@ export function createHockeyEngine({
     if (!drag) return;
     const p = canvasPoint(evt);
     const puck = drag.puck;
-    puck.x = clamp(p.x, bounds.left, bounds.right);
-    puck.y = clamp(p.y, bounds.top, bounds.bottom);
+
+    // Aiming is a small leash around where the puck started this turn,
+    // not a free drag across the whole field.
+    let lx = p.x - drag.anchorX;
+    let ly = p.y - drag.anchorY;
+    const leashDist = Math.hypot(lx, ly);
+    if (leashDist > LEASH_RADIUS) {
+      const s = LEASH_RADIUS / leashDist;
+      lx *= s;
+      ly *= s;
+    }
+    puck.x = clamp(drag.anchorX + lx, bounds.left, bounds.right);
+    puck.y = clamp(drag.anchorY + ly, bounds.top, bounds.bottom);
+
     drag.history.push({ x: p.x, y: p.y, t: performance.now() });
     if (drag.history.length > 6) drag.history.shift();
     evt.preventDefault();
@@ -525,9 +547,19 @@ export function createHockeyEngine({
   function drawWallCell(row, col) {
     const x = col * cellW;
     const y = row * cellH;
+
+    // Weathered castle-stone brown, with a little per-brick color variation
+    // (deterministic on position, not random, so it stays stable frame to
+    // frame) so the wall doesn't read as one flat block of color.
+    const brickPalettes = [
+      ["#a1825a", "#5c4128"],
+      ["#8f6f49", "#4e3620"],
+      ["#96774f", "#553b22"],
+    ];
+    const [top, bottom] = brickPalettes[(row * 7 + col * 13) % brickPalettes.length];
     const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
-    grad.addColorStop(0, "#2a5085");
-    grad.addColorStop(1, "#132844");
+    grad.addColorStop(0, top);
+    grad.addColorStop(1, bottom);
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, cellW, cellH);
 
