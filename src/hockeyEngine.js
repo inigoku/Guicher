@@ -328,8 +328,13 @@ export function createHockeyEngine({
     const isThrowMotion = idleMs < THROW_IDLE_MS && drag.speed > THROW_MOTION_SPEED;
 
     if (isThrowMotion) {
-      puck.x = clamp(drag.pointerX, bounds.left, bounds.right);
-      puck.y = clamp(drag.pointerY, bounds.top, bounds.bottom);
+      // Sticky follow — chases the pointer with a bit of elastic lag
+      // instead of teleporting straight to it every frame.
+      const STICK = 0.45;
+      const targetX = clamp(drag.pointerX, bounds.left, bounds.right);
+      const targetY = clamp(drag.pointerY, bounds.top, bounds.bottom);
+      puck.x += (targetX - puck.x) * STICK;
+      puck.y += (targetY - puck.y) * STICK;
     } else {
       const SPRING = 0.22;
       puck.x += (drag.anchorX - puck.x) * SPRING;
