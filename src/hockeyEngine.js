@@ -630,8 +630,19 @@ export function createHockeyEngine({
       lookY = (puck.vy / speed) * r * 0.09;
     }
 
-    const eyeR = r * 0.3;
-    const pupilR = eyeR * 0.48;
+    if (puck.isPlayer) {
+      drawWitcherFace(puck, lookX, lookY);
+    } else {
+      drawWarriorFace(puck, lookX, lookY);
+    }
+  }
+
+  // The player's puck: white-wolf hair, golden cat-eyes, a scar and a
+  // wolf-medallion nod to Geralt of Rivia — a lone monster hunter among
+  // the warrior pucks.
+  function drawWitcherFace(puck, lookX, lookY) {
+    const r = puck.r;
+    const eyeR = r * 0.28;
     const eyeOffsetX = r * 0.34;
     const eyeOffsetY = r * -0.08;
     const eyes = [
@@ -639,9 +650,24 @@ export function createHockeyEngine({
       { x: puck.x + eyeOffsetX, y: puck.y + eyeOffsetY },
     ];
 
+    // white hair swept back from the crown
+    ctx.fillStyle = "#f2f2f0";
+    for (let i = -2; i <= 2; i++) {
+      const t = i / 2; // -1..1
+      const bx = puck.x + t * r * 0.75;
+      const by = puck.y - r * 0.82;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx - r * 0.13 + t * r * 0.1, by - r * 0.42);
+      ctx.lineTo(bx + r * 0.16, by + r * 0.12);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // cat eyes: almond sclera + vertical slit pupil
     for (const eye of eyes) {
       ctx.beginPath();
-      ctx.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
+      ctx.ellipse(eye.x, eye.y, eyeR, eyeR * 0.78, 0, 0, Math.PI * 2);
       ctx.fillStyle = "#fff";
       ctx.fill();
       ctx.lineWidth = Math.max(1, r * 0.03);
@@ -649,32 +675,151 @@ export function createHockeyEngine({
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.arc(eye.x + lookX, eye.y + lookY, pupilR, 0, Math.PI * 2);
-      ctx.fillStyle = "#1a1a1a";
+      ctx.ellipse(eye.x + lookX, eye.y + lookY, eyeR * 0.62, eyeR * 0.62, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#c9962b";
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(eye.x + lookX - pupilR * 0.35, eye.y + lookY - pupilR * 0.35, pupilR * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.ellipse(eye.x + lookX, eye.y + lookY, eyeR * 0.16, eyeR * 0.58, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#161200";
       ctx.fill();
     }
 
-    // smiling mouth
-    ctx.beginPath();
-    ctx.arc(puck.x, puck.y + r * 0.32, r * 0.32, Math.PI * 0.12, Math.PI * 0.88);
+    // scar over the right eye — dark base line with a pale highlight so it
+    // reads against the orange puck at any zoom level
+    ctx.strokeStyle = "rgba(90,45,40,0.75)";
     ctx.lineWidth = Math.max(1.5, r * 0.07);
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
     ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(puck.x + eyeOffsetX - eyeR * 0.6, puck.y + eyeOffsetY - eyeR * 1.3);
+    ctx.lineTo(puck.x + eyeOffsetX + eyeR * 0.5, puck.y + r * 0.42);
     ctx.stroke();
 
-    // rosy cheeks
-    ctx.fillStyle = puck.isPlayer ? "rgba(255,255,255,0.25)" : "rgba(255,150,150,0.3)";
+    ctx.strokeStyle = "rgba(255,225,215,0.9)";
+    ctx.lineWidth = Math.max(1, r * 0.025);
     ctx.beginPath();
-    ctx.ellipse(puck.x - eyeOffsetX * 1.05, puck.y + r * 0.3, r * 0.14, r * 0.09, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(puck.x + eyeOffsetX - eyeR * 0.6, puck.y + eyeOffsetY - eyeR * 1.3);
+    ctx.lineTo(puck.x + eyeOffsetX + eyeR * 0.5, puck.y + r * 0.42);
+    ctx.stroke();
+
+    // stern, closed mouth
     ctx.beginPath();
-    ctx.ellipse(puck.x + eyeOffsetX * 1.05, puck.y + r * 0.3, r * 0.14, r * 0.09, 0, 0, Math.PI * 2);
+    ctx.moveTo(puck.x - r * 0.22, puck.y + r * 0.42);
+    ctx.quadraticCurveTo(puck.x, puck.y + r * 0.38, puck.x + r * 0.22, puck.y + r * 0.42);
+    ctx.lineWidth = Math.max(1.5, r * 0.06);
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.stroke();
+
+    // wolf medallion at the chin
+    ctx.beginPath();
+    ctx.arc(puck.x, puck.y + r * 0.68, r * 0.16, 0, Math.PI * 2);
+    ctx.fillStyle = "#8a8f9a";
     ctx.fill();
+    ctx.lineWidth = Math.max(1, r * 0.025);
+    ctx.strokeStyle = "#4a4e57";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.07, puck.y + r * 0.72);
+    ctx.lineTo(puck.x, puck.y + r * 0.6);
+    ctx.lineTo(puck.x + r * 0.07, puck.y + r * 0.72);
+    ctx.strokeStyle = "#4a4e57";
+    ctx.lineWidth = Math.max(1, r * 0.02);
+    ctx.stroke();
+  }
+
+  // Enemy pucks: horned helmets, furious brows, glowing red eyes and a
+  // snarl of jagged teeth — a horde of evil warriors.
+  function drawWarriorFace(puck, lookX, lookY) {
+    const r = puck.r;
+    const eyeR = r * 0.26;
+    const eyeOffsetX = r * 0.34;
+    const eyeOffsetY = r * -0.05;
+    const eyes = [
+      { x: puck.x - eyeOffsetX, y: puck.y + eyeOffsetY },
+      { x: puck.x + eyeOffsetX, y: puck.y + eyeOffsetY },
+    ];
+
+    // curved horns
+    ctx.fillStyle = "#2a2a2e";
+    for (const side of [-1, 1]) {
+      const baseX = puck.x + side * r * 0.55;
+      const baseY = puck.y - r * 0.62;
+      ctx.beginPath();
+      ctx.moveTo(baseX - side * r * 0.14, baseY + r * 0.1);
+      ctx.quadraticCurveTo(
+        baseX + side * r * 0.55, baseY - r * 0.55,
+        baseX + side * r * 0.18, baseY - r * 0.85
+      );
+      ctx.quadraticCurveTo(baseX + side * r * 0.02, baseY - r * 0.45, baseX + side * r * 0.16, baseY + r * 0.14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.4)";
+      ctx.lineWidth = Math.max(1, r * 0.02);
+      ctx.stroke();
+    }
+
+    // angry eyebrows
+    ctx.strokeStyle = "#0d0d0f";
+    ctx.lineWidth = Math.max(1.5, r * 0.07);
+    ctx.lineCap = "round";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(puck.x + side * (eyeOffsetX - eyeR * 0.9), puck.y + eyeOffsetY - eyeR * 0.4);
+      ctx.lineTo(puck.x + side * (eyeOffsetX + eyeR * 0.9), puck.y + eyeOffsetY - eyeR * 1.4);
+      ctx.stroke();
+    }
+
+    // glowing red eyes — no white sclera, just menacing embers
+    for (const eye of eyes) {
+      ctx.beginPath();
+      ctx.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
+      ctx.fillStyle = "#1a0505";
+      ctx.fill();
+
+      const glow = ctx.createRadialGradient(
+        eye.x + lookX, eye.y + lookY, 0,
+        eye.x + lookX, eye.y + lookY, eyeR * 0.75
+      );
+      glow.addColorStop(0, "#ff5a3c");
+      glow.addColorStop(1, "#8a1a10");
+      ctx.beginPath();
+      ctx.arc(eye.x + lookX, eye.y + lookY, eyeR * 0.62, 0, Math.PI * 2);
+      ctx.fillStyle = glow;
+      ctx.fill();
+    }
+
+    // snarling jagged teeth
+    const mouthY = puck.y + r * 0.38;
+    const mouthHalfW = r * 0.34;
+    ctx.beginPath();
+    ctx.moveTo(puck.x - mouthHalfW, mouthY);
+    const teeth = 5;
+    for (let i = 0; i <= teeth; i++) {
+      const tx = puck.x - mouthHalfW + (i / teeth) * mouthHalfW * 2;
+      const ty = mouthY + (i % 2 === 0 ? r * 0.14 : -r * 0.02);
+      ctx.lineTo(tx, ty);
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.lineWidth = Math.max(1.5, r * 0.05);
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.lineTo(puck.x + mouthHalfW, mouthY);
+    ctx.closePath();
+    ctx.fill();
+
+    // war-paint stripes on the cheeks
+    ctx.strokeStyle = "rgba(200,40,40,0.55)";
+    ctx.lineWidth = Math.max(1, r * 0.045);
+    ctx.lineCap = "round";
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(puck.x + side * (eyeOffsetX + r * 0.05 + i * r * 0.09), puck.y + r * 0.2);
+        ctx.lineTo(puck.x + side * (eyeOffsetX - r * 0.05 + i * r * 0.09), puck.y + r * 0.4);
+        ctx.stroke();
+      }
+    }
   }
 
   function updateExplosions() {
