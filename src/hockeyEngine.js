@@ -2,6 +2,9 @@
 // Deliberately framework-agnostic — the game loop is imperative and runs
 // outside React's render cycle. A component mounts it via createHockeyEngine
 // and must call destroy() on unmount.
+import floorTileUrl from "./assets/floor-tile.webp";
+import wallBrickUrl from "./assets/wall-brick.webp";
+
 export function createHockeyEngine({
   canvas,
   field,
@@ -12,6 +15,27 @@ export function createHockeyEngine({
   onGameOver,
 }) {
   const ctx = canvas.getContext("2d");
+
+  // Stone/brick textures (Gemini-generated), tiled one texture repeat per
+  // grid cell via pattern.setTransform. Patterns are built once the image
+  // finishes loading; drawField() falls back to a flat fill until then.
+  let floorPattern = null;
+  let wallPattern = null;
+  const floorImg = new Image();
+  floorImg.onload = () => {
+    floorPattern = ctx.createPattern(floorImg, "repeat");
+  };
+  floorImg.src = floorTileUrl;
+  const wallImg = new Image();
+  wallImg.onload = () => {
+    wallPattern = ctx.createPattern(wallImg, "repeat");
+  };
+  wallImg.src = wallBrickUrl;
+
+  function tiledPattern(pattern, img, cellSizeW, cellSizeH) {
+    pattern.setTransform(new DOMMatrix().scale(cellSizeW / img.naturalWidth, cellSizeH / img.naturalHeight));
+    return pattern;
+  }
 
   // Reference design width. All gameplay constants are defined relative to
   // this and rescaled by `scale` whenever the viewport changes. The field
@@ -575,19 +599,23 @@ export function createHockeyEngine({
     const x = col * cellW;
     const y = row * cellH;
 
-    // Weathered castle-stone brown, with a little per-brick color variation
-    // (deterministic on position, not random, so it stays stable frame to
-    // frame) so the wall doesn't read as one flat block of color.
-    const brickPalettes = [
-      ["#a1825a", "#5c4128"],
-      ["#8f6f49", "#4e3620"],
-      ["#96774f", "#553b22"],
-    ];
-    const [top, bottom] = brickPalettes[(row * 7 + col * 13) % brickPalettes.length];
-    const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
-    grad.addColorStop(0, top);
-    grad.addColorStop(1, bottom);
-    ctx.fillStyle = grad;
+    if (wallPattern) {
+      ctx.fillStyle = tiledPattern(wallPattern, wallImg, cellW, cellH);
+    } else {
+      // Fallback while the texture is still loading: weathered castle-stone
+      // brown, with a little per-brick color variation (deterministic on
+      // position) so the wall doesn't read as one flat block of color.
+      const brickPalettes = [
+        ["#a1825a", "#5c4128"],
+        ["#8f6f49", "#4e3620"],
+        ["#96774f", "#553b22"],
+      ];
+      const [top, bottom] = brickPalettes[(row * 7 + col * 13) % brickPalettes.length];
+      const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
+      grad.addColorStop(0, top);
+      grad.addColorStop(1, bottom);
+      ctx.fillStyle = grad;
+    }
     ctx.fillRect(x, y, cellW, cellH);
 
     ctx.strokeStyle = "rgba(0,0,0,0.35)";
@@ -684,21 +712,29 @@ export function createHockeyEngine({
   function drawField() {
     ctx.clearRect(0, 0, W, H);
 
-    // floor — a base stone gradient with soft per-tile mottling on top.
-    // Each tile is a radial gradient fading all the way to transparent, so
-    // it blends into its neighbors by construction — no hard seam is ever
-    // drawn, unlike the walls' crisp bordered bricks.
+    // floor
     const floorTop = cellH;
     const floorBottom = H - cellH;
-    const floorGrad = ctx.createLinearGradient(0, floorTop, 0, floorBottom);
-    floorGrad.addColorStop(0, "#a19c93");
-    floorGrad.addColorStop(1, "#6e6a62");
-    ctx.fillStyle = floorGrad;
-    ctx.fillRect(cellW, floorTop, W - cellW * 2, floorBottom - floorTop);
+    if (floorPattern) {
+      // The generated stone texture already has its own natural variation
+      // baked in, so it's used as-is — no extra per-tile tinting needed.
+      ctx.fillStyle = tiledPattern(floorPattern, floorImg, cellW, cellH);
+      ctx.fillRect(cellW, floorTop, W - cellW * 2, floorBottom - floorTop);
+    } else {
+      // Fallback while the texture is still loading: a flat stone gradient
+      // with soft per-tile mottling — each tile is a radial gradient fading
+      // all the way to transparent, so it blends into its neighbors by
+      // construction, unlike the walls' crisp bordered bricks.
+      const floorGrad = ctx.createLinearGradient(0, floorTop, 0, floorBottom);
+      floorGrad.addColorStop(0, "#a19c93");
+      floorGrad.addColorStop(1, "#6e6a62");
+      ctx.fillStyle = floorGrad;
+      ctx.fillRect(cellW, floorTop, W - cellW * 2, floorBottom - floorTop);
 
-    for (let row = 1; row < gridRows - 1; row++) {
-      for (let col = 1; col < GRID_COLS - 1; col++) {
-        drawFloorTint(row, col);
+      for (let row = 1; row < gridRows - 1; row++) {
+        for (let col = 1; col < GRID_COLS - 1; col++) {
+          drawFloorTint(row, col);
+        }
       }
     }
 
