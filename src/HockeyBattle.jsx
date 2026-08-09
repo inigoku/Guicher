@@ -32,7 +32,7 @@ export default function HockeyBattle() {
 
   const hint =
     gameOver === "win"
-      ? "¡Ganaste! Todos los enemigos fueron eliminados."
+      ? "¡Escapaste de la prisión!"
       : gameOver === "lose"
       ? "Perdiste. Tu personaje fue destruido."
       : turn === "player"

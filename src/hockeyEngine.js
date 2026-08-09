@@ -83,12 +83,12 @@ export function createHockeyEngine({
   // so a pause-then-release doesn't launch using stale motion history.
   const THROW_IDLE_MS = 80;
 
-  // The field is a grid of cells ("ladrillos"). Two kinds for now: wall
-  // cells form a one-cell-thick ring that closes off the field, floor
-  // cells are the playable area inside that ring. A mid-field wall (also
-  // made of wall cells) splits the field with a gap pucks can pass through.
+  // The field is a grid of cells: a prison. `wallCells` holds every
+  // currently-solid cell (border ring, the player's starting cell walls,
+  // and the two doors) as { row, col, type, hp, rect }. Cells are removed
+  // from it as doors break/open, so the collidable set shrinks over the
+  // course of a level instead of being fixed at build time.
   const GRID_COLS = 9;
-  const MID_WALL_GAP = 3;
 
   let W = REF_W;
   let H = REF_W * (16 / 9);
@@ -96,9 +96,12 @@ export function createHockeyEngine({
   let cellW = 0;
   let cellH = 0;
   let gridRows = 0;
-  let midWallRow = 0;
-  let midWallCols = [];
-  let midWallRects = [];
+  let wallCells = [];
+  let mainDoorCell = null;
+  let mainDoorRect = null;
+  let mainDoorOpen = false;
+  let playerStart = { x: 0, y: 0 };
+  let guardStart = { x: 0, y: 0 };
   let floorTintMap = [];
   let floorVariantMap = [];
   let wallVariantMap = [];
@@ -117,23 +120,100 @@ export function createHockeyEngine({
     bounds.bottom = H - cellH - PUCK_R;
   }
 
-  function buildMidWall() {
-    midWallRow = Math.floor(gridRows / 2);
-    const playableCols = GRID_COLS - 2; // excludes the border wall columns
-    const gapStart = 1 + Math.floor((playableCols - MID_WALL_GAP) / 2);
-    const gapEnd = gapStart + MID_WALL_GAP - 1;
+  function addWallCell(row, col, type, hp) {
+    const cell = {
+      row, col, type, hp: hp ?? null,
+      rect: { x: col * cellW, y: row * cellH, w: cellW, h: cellH },
+    };
+    wallCells.push(cell);
+    return cell;
+  }
 
-    midWallCols = [];
-    for (let col = 1; col < GRID_COLS - 1; col++) {
-      if (col < gapStart || col > gapEnd) midWallCols.push(col);
+  function removeWallCell(cell) {
+    const idx = wallCells.indexOf(cell);
+    if (idx !== -1) wallCells.splice(idx, 1);
+  }
+
+  // Builds the prison: a bordered room with the player locked in a small
+  // cell (three solid walls + one breakable door) partway down a corridor
+  // that leads up to the main door, guarded by a single enemy. The main
+  // door starts closed (just another wall cell) and only opens once the
+  // guard is defeated — see maybeOpenMainDoor().
+  function buildLevel() {
+    wallCells = [];
+
+    const midCol = Math.floor(GRID_COLS / 2);
+
+    // border ring, leaving a gap at the main door's column on the top row
+    for (let col = 0; col < GRID_COLS; col++) {
+      if (col !== midCol) addWallCell(0, col, "wall");
+      addWallCell(gridRows - 1, col, "wall");
+    }
+    for (let row = 1; row < gridRows - 1; row++) {
+      addWallCell(row, 0, "wall");
+      addWallCell(row, GRID_COLS - 1, "wall");
     }
 
-    midWallRects = midWallCols.map((col) => ({
-      x: col * cellW,
-      y: midWallRow * cellH,
-      w: cellW,
-      h: cellH,
-    }));
+    mainDoorCell = addWallCell(0, midCol, "mainDoor");
+    mainDoorRect = mainDoorCell.rect;
+    mainDoorOpen = false;
+
+    // the player's starting cell: three walls + one breakable door facing
+    // the corridor
+    const cellLeftCol = midCol - 1;
+    const cellCenterCol = midCol;
+    const cellRightCol = midCol + 1;
+    const cellBottomWallRow = gridRows - 2;
+    const cellInteriorRow2 = gridRows - 3;
+    const cellInteriorRow1 = gridRows - 4;
+    const cellDoorRow = gridRows - 5;
+
+    addWallCell(cellInteriorRow1, cellLeftCol - 1, "wall");
+    addWallCell(cellInteriorRow2, cellLeftCol - 1, "wall");
+    addWallCell(cellInteriorRow1, cellRightCol + 1, "wall");
+    addWallCell(cellInteriorRow2, cellRightCol + 1, "wall");
+    addWallCell(cellBottomWallRow, cellLeftCol, "wall");
+    addWallCell(cellBottomWallRow, cellCenterCol, "wall");
+    addWallCell(cellBottomWallRow, cellRightCol, "wall");
+    addWallCell(cellDoorRow, cellLeftCol, "wall");
+    addWallCell(cellDoorRow, cellCenterCol, "cellDoor", 1);
+    addWallCell(cellDoorRow, cellRightCol, "wall");
+
+    playerStart = {
+      x: cellCenterCol * cellW + cellW / 2,
+      y: cellInteriorRow2 * cellH + cellH / 2,
+    };
+    const guardRow = Math.max(1, Math.floor(cellDoorRow / 2));
+    guardStart = {
+      x: midCol * cellW + cellW / 2,
+      y: guardRow * cellH + cellH / 2,
+    };
+  }
+
+  function maybeOpenMainDoor() {
+    if (mainDoorOpen) return;
+    if (pucks.some((p) => !p.isPlayer)) return; // guard still alive
+    mainDoorOpen = true;
+    removeWallCell(mainDoorCell);
+    spawnExplosion(
+      mainDoorRect.x + mainDoorRect.w / 2,
+      mainDoorRect.y + mainDoorRect.h / 2,
+      Math.min(mainDoorRect.w, mainDoorRect.h) / 2
+    );
+  }
+
+  function checkExit() {
+    if (gameOver || !mainDoorOpen) return;
+    const player = pucks.find((p) => p.isPlayer);
+    if (!player) return;
+    const r = mainDoorRect;
+    if (
+      player.x > r.x - player.r * 0.3 &&
+      player.x < r.x + r.w + player.r * 0.3 &&
+      player.y < r.y + r.h * 0.65
+    ) {
+      endGame("win");
+    }
   }
 
   // Randomized once (not per-frame, or it would flicker) whenever the grid
@@ -175,10 +255,12 @@ export function createHockeyEngine({
     THROW_MOTION_SPEED = BASE.throwMotionSpeed * scale;
 
     cellW = W / GRID_COLS;
-    gridRows = Math.max(3, Math.round(H / cellW));
+    // Needs enough rows for the border, the corridor, and the player's
+    // starting cell to all fit (see buildLevel).
+    gridRows = Math.max(12, Math.round(H / cellW));
     cellH = H / gridRows;
 
-    buildMidWall();
+    buildLevel();
     buildFloorTintMap();
     updateBounds();
 
@@ -217,19 +299,10 @@ export function createHockeyEngine({
   }
 
   function initialLayout() {
-    const list = [];
-    list.push(makePuck(W / 2, H * 0.87, true));
-    const cols = 3, rows = 2;
-    const colGap = W * 0.24;
-    const rowGap = H * 0.075;
-    const startX = W / 2 - ((cols - 1) * colGap) / 2;
-    const startY = H * 0.16;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        list.push(makePuck(startX + c * colGap, startY + r * rowGap, false));
-      }
-    }
-    return list;
+    return [
+      makePuck(playerStart.x, playerStart.y, true),
+      makePuck(guardStart.x, guardStart.y, false),
+    ];
   }
 
   let pucks = [];
@@ -247,6 +320,7 @@ export function createHockeyEngine({
   let gameOver = null; // null | "win" | "lose"
 
   function resetGame() {
+    buildLevel();
     pucks = initialLayout();
     explosions = [];
     collisionCount = 0;
@@ -277,10 +351,7 @@ export function createHockeyEngine({
     while (enemyQueue.length && !pucks.includes(enemyQueue[0])) enemyQueue.shift();
 
     if (enemyQueue.length === 0) {
-      if (!pucks.some((p) => !p.isPlayer)) {
-        endGame("win");
-        return;
-      }
+      maybeOpenMainDoor();
       turn = "player";
       inputLocked = false;
       onTurnChange("player");
@@ -303,10 +374,7 @@ export function createHockeyEngine({
   function advanceTurn() {
     if (gameOver) return;
     if (turn === "player") {
-      if (!pucks.some((p) => !p.isPlayer)) {
-        endGame("win");
-        return;
-      }
+      maybeOpenMainDoor();
       turn = "enemy";
       onTurnChange("enemy");
       enemyQueue = pucks.filter((p) => !p.isPlayer);
@@ -427,13 +495,26 @@ export function createHockeyEngine({
     return Math.max(lo, Math.min(hi, v));
   }
 
-  function resolveWallCellCollision(puck, rect) {
+  function resolveLevelCellCollision(puck, cell, cellsToRemove) {
+    const rect = cell.rect;
     const closestX = clamp(puck.x, rect.x, rect.x + rect.w);
     const closestY = clamp(puck.y, rect.y, rect.y + rect.h);
     const dx = puck.x - closestX;
     const dy = puck.y - closestY;
     const distSq = dx * dx + dy * dy;
     if (distSq >= puck.r * puck.r) return;
+
+    // The player breaks the cell door open on contact during their turn —
+    // same "destroys what it hits" rule as enemy pucks. Every other
+    // contact (the guard, or the player just passing by outside their
+    // turn) is a normal bounce.
+    if (cell.type === "cellDoor" && puck.isPlayer && turn === "player" && !cellsToRemove.has(cell)) {
+      cell.hp -= 1;
+      if (cell.hp <= 0) {
+        cellsToRemove.add(cell);
+        spawnExplosion(rect.x + rect.w / 2, rect.y + rect.h / 2, Math.min(rect.w, rect.h) / 2);
+      }
+    }
 
     let nx, ny, penetration;
     const dist = Math.sqrt(distSq);
@@ -467,6 +548,7 @@ export function createHockeyEngine({
   // ---- Physics ----
   function step() {
     toRemove = new Set();
+    const cellsToRemove = new Set();
 
     for (const puck of pucks) {
       if (puck.grabbed) continue;
@@ -480,22 +562,11 @@ export function createHockeyEngine({
         puck.vy = 0;
       }
 
-      if (puck.x < bounds.left) {
-        puck.x = bounds.left;
-        puck.vx = Math.abs(puck.vx) * RESTITUTION_WALL;
-      } else if (puck.x > bounds.right) {
-        puck.x = bounds.right;
-        puck.vx = -Math.abs(puck.vx) * RESTITUTION_WALL;
-      }
-      if (puck.y < bounds.top) {
-        puck.y = bounds.top;
-        puck.vy = Math.abs(puck.vy) * RESTITUTION_WALL;
-      } else if (puck.y > bounds.bottom) {
-        puck.y = bounds.bottom;
-        puck.vy = -Math.abs(puck.vy) * RESTITUTION_WALL;
-      }
+      for (const cell of wallCells) resolveLevelCellCollision(puck, cell, cellsToRemove);
+    }
 
-      for (const rect of midWallRects) resolveWallCellCollision(puck, rect);
+    if (cellsToRemove.size) {
+      for (const cell of cellsToRemove) removeWallCell(cell);
     }
 
     // puck-puck collisions
@@ -732,9 +803,69 @@ export function createHockeyEngine({
   function torchRows() {
     const innerRows = gridRows - 2;
     if (innerRows < 3) return [];
-    return [0.16, 0.5, 0.84]
-      .map((f) => 1 + Math.round(f * (innerRows - 1)))
-      .filter((row) => row !== midWallRow);
+    return [0.16, 0.5, 0.84].map((f) => 1 + Math.round(f * (innerRows - 1)));
+  }
+
+  // A wooden cell door or the grander main gate — visually distinct from
+  // the brick walls so it reads as something breakable/openable.
+  function drawDoorCell(cell) {
+    const { row, col, type } = cell;
+    const x = col * cellW;
+    const y = row * cellH;
+    const isMain = type === "mainDoor";
+
+    const grad = ctx.createLinearGradient(x, y, x, y + cellH);
+    grad.addColorStop(0, isMain ? "#6b4423" : "#5c4028");
+    grad.addColorStop(1, isMain ? "#3d2814" : "#3a2818");
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, cellW, cellH);
+
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = Math.max(1, scale);
+    const planks = isMain ? 4 : 3;
+    for (let i = 1; i < planks; i++) {
+      const px = x + (cellW / planks) * i;
+      ctx.beginPath();
+      ctx.moveTo(px, y + 2);
+      ctx.lineTo(px, y + cellH - 2);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "#8a8a8a";
+    ctx.lineWidth = Math.max(2, cellH * 0.06);
+    const bandYs = isMain ? [y + cellH * 0.25, y + cellH * 0.75] : [y + cellH * 0.5];
+    for (const by of bandYs) {
+      ctx.beginPath();
+      ctx.moveTo(x + 2, by);
+      ctx.lineTo(x + cellW - 2, by);
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(x + cellW * 0.5, y + cellH * 0.55, cellW * 0.09, 0, Math.PI * 2);
+    ctx.strokeStyle = "#c9a227";
+    ctx.lineWidth = Math.max(1.5, cellW * 0.025);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+  }
+
+  // Once the guard falls, the main door is gone from wallCells — draw an
+  // inviting warm glow there instead, so the exit reads as "go here".
+  function drawOpenMainDoor() {
+    const r = mainDoorRect;
+    const cx = r.x + r.w / 2;
+    const glow = ctx.createRadialGradient(cx, r.y + r.h * 0.3, 0, cx, r.y + r.h * 0.3, r.w * 2.2);
+    glow.addColorStop(0, "rgba(255,235,190,0.9)");
+    glow.addColorStop(0.5, "rgba(255,200,120,0.35)");
+    glow.addColorStop(1, "rgba(255,200,120,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - r.w * 2, 0, r.w * 4, r.h * 3);
+
+    ctx.fillStyle = "#f4e6c8";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
   }
 
   function drawField() {
@@ -772,18 +903,16 @@ export function createHockeyEngine({
       }
     }
 
-    // wall cells — the ring that closes off the field
-    for (let col = 0; col < GRID_COLS; col++) {
-      drawWallCell(0, col);
-      drawWallCell(gridRows - 1, col);
+    // every currently-solid cell: border, the player's starting cell, and
+    // whichever doors haven't broken/opened yet
+    for (const cell of wallCells) {
+      if (cell.type === "cellDoor" || cell.type === "mainDoor") {
+        drawDoorCell(cell);
+      } else {
+        drawWallCell(cell.row, cell.col);
+      }
     }
-    for (let row = 1; row < gridRows - 1; row++) {
-      drawWallCell(row, 0);
-      drawWallCell(row, GRID_COLS - 1);
-    }
-
-    // mid-field wall — same wall cells, with a gap pucks can pass through
-    for (const col of midWallCols) drawWallCell(midWallRow, col);
+    if (mainDoorOpen) drawOpenMainDoor();
 
     // torches mounted on the side walls
     for (const row of torchRows()) {
@@ -1087,6 +1216,7 @@ export function createHockeyEngine({
   function loop() {
     if (!running) return;
     for (let i = 0; i < SUBSTEPS; i++) step();
+    checkExit();
     render();
     if (inputLocked && !gameOver && allSettled()) advanceTurn();
     rafId = requestAnimationFrame(loop);
