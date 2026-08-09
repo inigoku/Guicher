@@ -417,14 +417,15 @@ export function createHockeyEngine({
     // Placeholder AI: a random impulse in a random direction. Same rule as
     // the player's throw — below throwing speed, it just doesn't move. A
     // freed prisoner isn't hostile — it's biased toward the main door
-    // instead of wandering randomly, since it's trying to escape. A guard
-    // hunts down a freed prisoner instead of wandering randomly, if one is
-    // loose.
+    // instead of wandering randomly, since it's trying to escape — but his
+    // aim isn't perfect, he's stumbling toward it more than walking a
+    // straight line. A guard hunts down a freed prisoner instead of
+    // wandering randomly, if one is loose.
     let angle;
     if (enemy.isNpc) {
       const toDoorX = mainDoorRect.x + mainDoorRect.w / 2 - enemy.x;
       const toDoorY = mainDoorRect.y + mainDoorRect.h / 2 - enemy.y;
-      angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 0.8;
+      angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 2.4;
     } else {
       const target = pucks.find((p) => p.isNpc && !p.imprisoned);
       if (target) {
@@ -497,18 +498,85 @@ export function createHockeyEngine({
     }
   }
 
+  // Push the puck out of any wall cell (a closed door counts as solid) or
+  // other puck it currently overlaps, along the true penetration normal —
+  // the same idea as the physics step's own collision resolution. Used
+  // after every drag sub-step so a dragged puck slides along a wall or
+  // around a corner instead of just refusing to move, which could
+  // otherwise deadlock right at a doorway threshold when approaching it
+  // from an angle.
+  function depenetrate(puck) {
+    for (let iter = 0; iter < 4; iter++) {
+      let resolved = true;
+      for (const cell of wallCells) {
+        if (cell.type === "mainDoor" && mainDoorOpen) continue;
+        const rect = cell.rect;
+        const nearestX = clamp(puck.x, rect.x, rect.x + rect.w);
+        const nearestY = clamp(puck.y, rect.y, rect.y + rect.h);
+        const dx = puck.x - nearestX;
+        const dy = puck.y - nearestY;
+        const dist = Math.hypot(dx, dy);
+        if (dist >= puck.r) continue;
+        resolved = false;
+        if (dist > 0.0001) {
+          const push = puck.r - dist;
+          puck.x += (dx / dist) * push;
+          puck.y += (dy / dist) * push;
+        } else {
+          const left = puck.x - rect.x;
+          const right = rect.x + rect.w - puck.x;
+          const top = puck.y - rect.y;
+          const bottom = rect.y + rect.h - puck.y;
+          const min = Math.min(left, right, top, bottom);
+          if (min === left) puck.x = rect.x - puck.r;
+          else if (min === right) puck.x = rect.x + rect.w + puck.r;
+          else if (min === top) puck.y = rect.y - puck.r;
+          else puck.y = rect.y + rect.h + puck.r;
+        }
+      }
+      for (const other of pucks) {
+        if (other === puck || other.imprisoned) continue;
+        const dx = puck.x - other.x;
+        const dy = puck.y - other.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = puck.r + other.r;
+        if (dist >= minDist || dist <= 0.0001) continue;
+        resolved = false;
+        const push = minDist - dist;
+        puck.x += (dx / dist) * push;
+        puck.y += (dy / dist) * push;
+      }
+      if (resolved) break;
+    }
+  }
+
   function pointerMove(evt) {
     if (!drag) return;
     const p = canvasPoint(evt);
     const puck = drag.puck;
 
-    // Pure free movement — the puck just follows the pointer directly,
-    // clamped to the field.
-    puck.x = clamp(p.x, bounds.left, bounds.right);
-    puck.y = clamp(p.y, bounds.top, bounds.bottom);
+    // Free movement, but the puck can't be dragged through walls, doors,
+    // or other pucks — it slides along them instead. Advance toward the
+    // pointer in small sub-steps rather than jumping straight to it in one
+    // go — a single pointermove event can easily cover more distance than
+    // a wall is thick, which would let the puck tunnel clean through it if
+    // only the final position were checked — depenetrating after each
+    // sub-step.
+    const targetX = clamp(p.x, bounds.left, bounds.right);
+    const targetY = clamp(p.y, bounds.top, bounds.bottom);
+    const dx = targetX - puck.x;
+    const dy = targetY - puck.y;
+    const dist = Math.hypot(dx, dy);
+    const maxStep = puck.r * 0.4;
+    const steps = Math.max(1, Math.ceil(dist / maxStep));
+    for (let i = 0; i < steps; i++) {
+      puck.x += dx / steps;
+      puck.y += dy / steps;
+      depenetrate(puck);
+    }
 
     drag.lastMoveTime = performance.now();
-    drag.history.push({ x: p.x, y: p.y, t: drag.lastMoveTime });
+    drag.history.push({ x: puck.x, y: puck.y, t: drag.lastMoveTime });
     if (drag.history.length > 6) drag.history.shift();
     evt.preventDefault();
   }
