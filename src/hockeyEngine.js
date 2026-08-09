@@ -27,15 +27,21 @@ export function createHockeyEngine({
     // decay all the way to a full stop under the ice-like low friction
     // would make each turn take several seconds.
     settleSpeed: 1.6,
-    // How far the player's puck can be dragged from where it started this
-    // turn — a small aiming leash rather than free repositioning.
-    leashRadius: 90,
+    // While dragging, the puck only follows the pointer when the pointer is
+    // moving at least this fast (px per ~frame) — a real throwing motion.
+    // Below that, or once the pointer stops, it eases back to where it
+    // started the turn instead of staying wherever it was dropped.
+    throwMotionSpeed: 2,
   };
 
   const FRICTION = 0.992; // per-substep velocity damping
   const RESTITUTION_WALL = 0.85;
   const RESTITUTION_PUCK = 0.95;
   const SUBSTEPS = 4;
+  // If the pointer has been still for longer than this, treat the drag as
+  // stopped — both for easing the puck back and for the release velocity,
+  // so a pause-then-release doesn't launch using stale motion history.
+  const THROW_IDLE_MS = 80;
 
   // The field is a grid of cells ("ladrillos"). Two kinds for now: wall
   // cells form a one-cell-thick ring that closes off the field, floor
@@ -57,7 +63,7 @@ export function createHockeyEngine({
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
   let SETTLE_SPEED = BASE.settleSpeed;
-  let LEASH_RADIUS = BASE.leashRadius;
+  let THROW_MOTION_SPEED = BASE.throwMotionSpeed;
 
   const bounds = { left: 0, right: 0, top: 0, bottom: 0 };
 
@@ -104,7 +110,7 @@ export function createHockeyEngine({
     MIN_SPEED = BASE.minSpeed * scale;
     MAX_THROW_SPEED = BASE.maxThrowSpeed * scale;
     SETTLE_SPEED = BASE.settleSpeed * scale;
-    LEASH_RADIUS = BASE.leashRadius * scale;
+    THROW_MOTION_SPEED = BASE.throwMotionSpeed * scale;
 
     cellW = W / GRID_COLS;
     gridRows = Math.max(3, Math.round(H / cellW));
@@ -274,11 +280,16 @@ export function createHockeyEngine({
     const dx = p.x - player.x;
     const dy = p.y - player.y;
     if (Math.hypot(dx, dy) <= player.r * 1.4) {
+      const now = performance.now();
       drag = {
         puck: player,
         anchorX: player.x,
         anchorY: player.y,
-        history: [{ x: p.x, y: p.y, t: performance.now() }],
+        pointerX: p.x,
+        pointerY: p.y,
+        speed: 0,
+        lastMoveTime: now,
+        history: [{ x: p.x, y: p.y, t: now }],
       };
       player.grabbed = true;
       player.vx = 0;
@@ -291,24 +302,39 @@ export function createHockeyEngine({
   function pointerMove(evt) {
     if (!drag) return;
     const p = canvasPoint(evt);
-    const puck = drag.puck;
+    const now = performance.now();
 
-    // Aiming is a small leash around where the puck started this turn,
-    // not a free drag across the whole field.
-    let lx = p.x - drag.anchorX;
-    let ly = p.y - drag.anchorY;
-    const leashDist = Math.hypot(lx, ly);
-    if (leashDist > LEASH_RADIUS) {
-      const s = LEASH_RADIUS / leashDist;
-      lx *= s;
-      ly *= s;
-    }
-    puck.x = clamp(drag.anchorX + lx, bounds.left, bounds.right);
-    puck.y = clamp(drag.anchorY + ly, bounds.top, bounds.bottom);
+    const prev = drag.history[drag.history.length - 1];
+    const dt = Math.max(1, now - prev.t);
+    const dist = Math.hypot(p.x - prev.x, p.y - prev.y);
+    drag.speed = (dist / dt) * 16; // px per ~frame, matching the throw-speed convention below
 
-    drag.history.push({ x: p.x, y: p.y, t: performance.now() });
+    drag.pointerX = p.x;
+    drag.pointerY = p.y;
+    drag.lastMoveTime = now;
+
+    drag.history.push({ x: p.x, y: p.y, t: now });
     if (drag.history.length > 6) drag.history.shift();
     evt.preventDefault();
+  }
+
+  // Runs every frame while a puck is being dragged. The puck only follows
+  // the pointer while it's moving at throwing speed; otherwise (paused,
+  // slow, or stalled) it eases back to where it started the turn.
+  function updateDrag() {
+    if (!drag) return;
+    const puck = drag.puck;
+    const idleMs = performance.now() - drag.lastMoveTime;
+    const isThrowMotion = idleMs < THROW_IDLE_MS && drag.speed > THROW_MOTION_SPEED;
+
+    if (isThrowMotion) {
+      puck.x = clamp(drag.pointerX, bounds.left, bounds.right);
+      puck.y = clamp(drag.pointerY, bounds.top, bounds.bottom);
+    } else {
+      const SPRING = 0.22;
+      puck.x += (drag.anchorX - puck.x) * SPRING;
+      puck.y += (drag.anchorY - puck.y) * SPRING;
+    }
   }
 
   function pointerUp(evt) {
@@ -316,7 +342,10 @@ export function createHockeyEngine({
     const puck = drag.puck;
     puck.grabbed = false;
     const hist = drag.history;
-    if (hist.length >= 2) {
+    const idleMs = performance.now() - drag.lastMoveTime;
+    // A pause before releasing means the puck already eased back toward the
+    // origin — don't launch it using stale motion from before the pause.
+    if (idleMs < THROW_IDLE_MS && hist.length >= 2) {
       const a = hist[0];
       const b = hist[hist.length - 1];
       const dt = Math.max(1, b.t - a.t);
@@ -465,6 +494,10 @@ export function createHockeyEngine({
     if (a.isPlayer !== b.isPlayer) {
       const enemy = a.isPlayer ? b : a;
       const playerPuck = a.isPlayer ? a : b;
+
+      // Still being aimed, not thrown yet — passing over an enemy while
+      // dragging shouldn't count as a hit.
+      if (playerPuck.grabbed) return;
 
       if (turn === "player") {
         if (!toRemove.has(enemy)) {
@@ -897,6 +930,7 @@ export function createHockeyEngine({
   let running = true;
   function loop() {
     if (!running) return;
+    updateDrag();
     for (let i = 0; i < SUBSTEPS; i++) step();
     render();
     if (inputLocked && !gameOver && allSettled()) advanceTurn();
