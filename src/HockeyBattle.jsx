@@ -36,7 +36,7 @@ export default function HockeyBattle() {
       : gameOver === "lose"
       ? "Perdiste. Tu personaje fue destruido."
       : turn === "player"
-      ? "Arrastra tu disco (naranja) para agarrarlo y suéltalo para lanzarlo."
+      ? "Arrastra tu disco para agarrarlo y suéltalo para lanzarlo."
       : "Turno de los enemigos...";
 
   return (

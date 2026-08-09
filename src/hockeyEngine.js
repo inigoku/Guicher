@@ -799,8 +799,8 @@ export function createHockeyEngine({
       puck.x, puck.y, puck.r
     );
     if (puck.isPlayer) {
-      grad.addColorStop(0, "#ffb066");
-      grad.addColorStop(1, "#b85f14");
+      grad.addColorStop(0, "#f3caa0");
+      grad.addColorStop(1, "#c98f60");
     } else {
       grad.addColorStop(0, "#4b5b78");
       grad.addColorStop(1, "#171d29");
@@ -853,18 +853,36 @@ export function createHockeyEngine({
       { x: puck.x + eyeOffsetX, y: puck.y + eyeOffsetY },
     ];
 
-    // white hair swept back from the crown
-    ctx.fillStyle = "#f2f2f0";
-    for (let i = -2; i <= 2; i++) {
-      const t = i / 2; // -1..1
-      const bx = puck.x + t * r * 0.75;
-      const by = puck.y - r * 0.82;
+    // full white mane covering the crown, with two long locks framing the
+    // face down past the temples
+    ctx.fillStyle = "#f4f1ea";
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.88, puck.y - r * 0.22);
+    ctx.quadraticCurveTo(puck.x - r * 0.78, puck.y - r * 0.95, puck.x, puck.y - r * 1.18);
+    ctx.quadraticCurveTo(puck.x + r * 0.78, puck.y - r * 0.95, puck.x + r * 0.88, puck.y - r * 0.22);
+    ctx.quadraticCurveTo(puck.x + r * 0.55, puck.y - r * 0.42, puck.x + r * 0.22, puck.y - r * 0.38);
+    ctx.quadraticCurveTo(puck.x, puck.y - r * 0.5, puck.x - r * 0.22, puck.y - r * 0.38);
+    ctx.quadraticCurveTo(puck.x - r * 0.55, puck.y - r * 0.42, puck.x - r * 0.88, puck.y - r * 0.22);
+    ctx.closePath();
+    ctx.fill();
+
+    for (const side of [-1, 1]) {
       ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(bx - r * 0.13 + t * r * 0.1, by - r * 0.42);
-      ctx.lineTo(bx + r * 0.16, by + r * 0.12);
+      ctx.moveTo(puck.x + side * r * 0.85, puck.y - r * 0.2);
+      ctx.quadraticCurveTo(puck.x + side * r * 1.05, puck.y + r * 0.15, puck.x + side * r * 0.8, puck.y + r * 0.5);
+      ctx.quadraticCurveTo(puck.x + side * r * 0.68, puck.y + r * 0.2, puck.x + side * r * 0.62, puck.y - r * 0.05);
       ctx.closePath();
       ctx.fill();
+    }
+
+    // soft strand lines for a bit of texture in the mane
+    ctx.strokeStyle = "rgba(190,186,176,0.5)";
+    ctx.lineWidth = Math.max(1, r * 0.02);
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(puck.x + i * r * 0.3, puck.y - r * 1.02);
+      ctx.lineTo(puck.x + i * r * 0.24, puck.y - r * 0.42);
+      ctx.stroke();
     }
 
     // cat eyes: almond sclera + vertical slit pupil
