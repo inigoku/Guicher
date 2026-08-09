@@ -614,36 +614,100 @@ export function createHockeyEngine({
     ctx.stroke();
   }
 
+  const STONE_PALETTES = [
+    ["#9a958c", "#6e6a62"],
+    ["#8f8b83", "#65615a"],
+    ["#a3a09a", "#78746c"],
+    ["#928d84", "#69655d"],
+  ];
+
+  function drawFloorCell(row, col) {
+    const x = col * cellW;
+    const y = row * cellH;
+    const [top, bottom] = STONE_PALETTES[(row * 11 + col * 17) % STONE_PALETTES.length];
+    const grad = ctx.createLinearGradient(x, y, x + cellW, y + cellH);
+    grad.addColorStop(0, top);
+    grad.addColorStop(1, bottom);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, cellW, cellH);
+
+    ctx.strokeStyle = "rgba(20, 18, 15, 0.28)";
+    ctx.lineWidth = Math.max(1, scale);
+    ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(x + 1, y + cellH - 1);
+    ctx.lineTo(x + 1, y + 1);
+    ctx.lineTo(x + cellW - 1, y + 1);
+    ctx.stroke();
+  }
+
+  // A torch mounted on the inner face of a border wall cell. `dir` is +1 on
+  // the left wall (flame reaches rightward into the floor) or -1 on the
+  // right wall. Flicker is driven off the clock, no extra state needed.
+  function drawTorch(x, y, dir) {
+    const s = cellW;
+    const t = performance.now() / 150 + x * 0.01 + y * 0.01;
+    const flicker = Math.sin(t) * 0.12 + Math.sin(t * 2.3) * 0.06;
+
+    const armLen = s * 0.32;
+    ctx.fillStyle = "#2b2723";
+    ctx.fillRect(x, y - s * 0.05, dir * armLen, s * 0.1);
+
+    const flameX = x + dir * armLen;
+    const flameY = y - s * 0.06;
+    const stickTop = flameY - s * 0.22;
+
+    ctx.strokeStyle = "#4a3421";
+    ctx.lineWidth = Math.max(1, s * 0.09);
+    ctx.beginPath();
+    ctx.moveTo(flameX, flameY + s * 0.08);
+    ctx.lineTo(flameX, stickTop);
+    ctx.stroke();
+
+    const glowR = s * (0.55 + flicker);
+    const glow = ctx.createRadialGradient(flameX, stickTop, 0, flameX, stickTop, glowR);
+    glow.addColorStop(0, "rgba(255,170,70,0.4)");
+    glow.addColorStop(1, "rgba(255,140,40,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(flameX, stickTop, glowR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(flameX, stickTop - s * (0.34 + flicker));
+    ctx.quadraticCurveTo(flameX + s * 0.17, stickTop - s * 0.1, flameX, stickTop + s * 0.1);
+    ctx.quadraticCurveTo(flameX - s * 0.17, stickTop - s * 0.1, flameX, stickTop - s * (0.34 + flicker));
+    ctx.closePath();
+    ctx.fillStyle = "#ff7a1a";
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(flameX, stickTop - s * (0.18 + flicker * 0.6));
+    ctx.quadraticCurveTo(flameX + s * 0.08, stickTop - s * 0.05, flameX, stickTop + s * 0.05);
+    ctx.quadraticCurveTo(flameX - s * 0.08, stickTop - s * 0.05, flameX, stickTop - s * (0.18 + flicker * 0.6));
+    ctx.closePath();
+    ctx.fillStyle = "#ffd23f";
+    ctx.fill();
+  }
+
+  function torchRows() {
+    const innerRows = gridRows - 2;
+    if (innerRows < 3) return [];
+    return [0.16, 0.5, 0.84]
+      .map((f) => 1 + Math.round(f * (innerRows - 1)))
+      .filter((row) => row !== midWallRow);
+  }
+
   function drawField() {
     ctx.clearRect(0, 0, W, H);
 
-    const floorLeft = cellW;
-    const floorTop = cellH;
-    const floorRight = W - cellW;
-    const floorBottom = H - cellH;
-
-    // floor cells — one continuous ice sheet with tile seams
-    const grad = ctx.createLinearGradient(0, floorTop, 0, floorBottom);
-    grad.addColorStop(0, "#dff4ff");
-    grad.addColorStop(1, "#b7e2fb");
-    ctx.fillStyle = grad;
-    ctx.fillRect(floorLeft, floorTop, floorRight - floorLeft, floorBottom - floorTop);
-
-    ctx.strokeStyle = "rgba(27, 58, 99, 0.08)";
-    ctx.lineWidth = Math.max(1, scale);
-    for (let col = 1; col < GRID_COLS - 1; col++) {
-      const x = col * cellW;
-      ctx.beginPath();
-      ctx.moveTo(x, floorTop);
-      ctx.lineTo(x, floorBottom);
-      ctx.stroke();
-    }
+    // floor — individual stone slabs rather than one flat sheet
     for (let row = 1; row < gridRows - 1; row++) {
-      const y = row * cellH;
-      ctx.beginPath();
-      ctx.moveTo(floorLeft, y);
-      ctx.lineTo(floorRight, y);
-      ctx.stroke();
+      for (let col = 1; col < GRID_COLS - 1; col++) {
+        drawFloorCell(row, col);
+      }
     }
 
     // wall cells — the ring that closes off the field
@@ -658,6 +722,13 @@ export function createHockeyEngine({
 
     // mid-field wall — same wall cells, with a gap pucks can pass through
     for (const col of midWallCols) drawWallCell(midWallRow, col);
+
+    // torches mounted on the side walls
+    for (const row of torchRows()) {
+      const y = row * cellH + cellH / 2;
+      drawTorch(cellW, y, 1);
+      drawTorch(W - cellW, y, -1);
+    }
   }
 
   function drawPuck(puck) {
