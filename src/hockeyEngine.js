@@ -102,6 +102,7 @@ export function createHockeyEngine({
   let mainDoorOpen = false;
   let playerStart = { x: 0, y: 0 };
   let guardStart = { x: 0, y: 0 };
+  let beggarStart = { x: 0, y: 0 };
   let floorTintMap = [];
   let floorVariantMap = [];
   let wallVariantMap = [];
@@ -134,11 +135,43 @@ export function createHockeyEngine({
     if (idx !== -1) wallCells.splice(idx, 1);
   }
 
-  // Builds the prison: a bordered room with the player locked in a small
-  // cell (three solid walls + one breakable door) partway down a corridor
-  // that leads up to the main door, guarded by a single enemy. The main
-  // door starts closed (just another wall cell) and only opens once the
-  // guard is defeated — see maybeOpenMainDoor().
+  // A 2-row-tall cell built against the left or right border wall, with a
+  // breakable door on the corridor-facing side (one row of the flanking
+  // wall is the door, the other stays solid). Returns the cell's interior
+  // center and the door cell so the caller can start a puck there / tag
+  // what the door releases.
+  function buildSideCell(side, bottomWallRow) {
+    const isLeft = side === "left";
+    const innerCol = isLeft ? 1 : GRID_COLS - 2; // against the border
+    const outerCol = isLeft ? 2 : GRID_COLS - 3; // corridor-facing col
+    const doorCol = isLeft ? 3 : GRID_COLS - 4;
+
+    const r2 = bottomWallRow - 1; // lower interior row
+    const r1 = r2 - 1; // upper interior row
+    const topWallRow = r1 - 1;
+
+    addWallCell(topWallRow, innerCol, "wall");
+    addWallCell(topWallRow, outerCol, "wall");
+    addWallCell(bottomWallRow, innerCol, "wall");
+    addWallCell(bottomWallRow, outerCol, "wall");
+
+    const doorCell = addWallCell(r1, doorCol, "cellDoor", 1);
+    addWallCell(r2, doorCol, "wall");
+
+    const center = {
+      x: (Math.min(innerCol, outerCol) * cellW + (Math.max(innerCol, outerCol) + 1) * cellW) / 2,
+      y: ((r1 + r2 + 1) / 2) * cellH,
+    };
+    return { center, doorCell };
+  }
+
+  // Builds the prison: four cells (two per side, lower and upper) opening
+  // onto a central corridor that leads up to the main door. The player
+  // starts locked in the lower-left cell; a beggar — not a threat, just
+  // another prisoner — is locked in the upper-right one and stays put
+  // until his own door is broken. A single guard patrols the corridor.
+  // The main door starts closed (just another wall cell) and only opens
+  // once the guard is defeated — see maybeOpenMainDoor().
   function buildLevel() {
     wallCells = [];
 
@@ -158,41 +191,29 @@ export function createHockeyEngine({
     mainDoorRect = mainDoorCell.rect;
     mainDoorOpen = false;
 
-    // the player's starting cell: three walls + one breakable door facing
-    // the corridor
-    const cellLeftCol = midCol - 1;
-    const cellCenterCol = midCol;
-    const cellRightCol = midCol + 1;
-    const cellBottomWallRow = gridRows - 2;
-    const cellInteriorRow2 = gridRows - 3;
-    const cellInteriorRow1 = gridRows - 4;
-    const cellDoorRow = gridRows - 5;
+    // The right-side cells are offset two rows up from their left-side
+    // counterparts so a door on one side never lines up with a door/wall
+    // on the other — the corridor is always at least two cells wide.
+    const ROW_STAGGER = 2;
+    const lowerBottomRow = gridRows - 2;
+    const upperBottomRow = Math.floor(gridRows / 2);
 
-    addWallCell(cellInteriorRow1, cellLeftCol - 1, "wall");
-    addWallCell(cellInteriorRow2, cellLeftCol - 1, "wall");
-    addWallCell(cellInteriorRow1, cellRightCol + 1, "wall");
-    addWallCell(cellInteriorRow2, cellRightCol + 1, "wall");
-    addWallCell(cellBottomWallRow, cellLeftCol, "wall");
-    addWallCell(cellBottomWallRow, cellCenterCol, "wall");
-    addWallCell(cellBottomWallRow, cellRightCol, "wall");
-    addWallCell(cellDoorRow, cellLeftCol, "wall");
-    addWallCell(cellDoorRow, cellCenterCol, "cellDoor", 1);
-    addWallCell(cellDoorRow, cellRightCol, "wall");
+    const lowerLeft = buildSideCell("left", lowerBottomRow);
+    buildSideCell("right", lowerBottomRow - ROW_STAGGER); // empty cell, just flavor
+    buildSideCell("left", upperBottomRow); // empty cell, just flavor
+    const upperRight = buildSideCell("right", upperBottomRow - ROW_STAGGER);
+    upperRight.doorCell.releases = "beggar";
 
-    playerStart = {
-      x: cellCenterCol * cellW + cellW / 2,
-      y: cellInteriorRow2 * cellH + cellH / 2,
-    };
-    const guardRow = Math.max(1, Math.floor(cellDoorRow / 2));
-    guardStart = {
-      x: midCol * cellW + cellW / 2,
-      y: guardRow * cellH + cellH / 2,
-    };
+    playerStart = lowerLeft.center;
+    beggarStart = upperRight.center;
+
+    const guardRow = Math.floor((lowerBottomRow - 4 + upperBottomRow) / 2);
+    guardStart = { x: midCol * cellW + cellW / 2, y: guardRow * cellH + cellH / 2 };
   }
 
   function maybeOpenMainDoor() {
     if (mainDoorOpen) return;
-    if (pucks.some((p) => !p.isPlayer)) return; // guard still alive
+    if (pucks.some((p) => !p.isPlayer && !p.isNpc)) return; // a guard is still alive
     mainDoorOpen = true;
     removeWallCell(mainDoorCell);
     spawnExplosion(
@@ -202,17 +223,27 @@ export function createHockeyEngine({
     );
   }
 
+  function inDoorway(puck, r) {
+    return (
+      puck.x > r.x - puck.r * 0.3 &&
+      puck.x < r.x + r.w + puck.r * 0.3 &&
+      puck.y < r.y + r.h * 0.65
+    );
+  }
+
   function checkExit() {
-    if (gameOver || !mainDoorOpen) return;
-    const player = pucks.find((p) => p.isPlayer);
-    if (!player) return;
-    const r = mainDoorRect;
-    if (
-      player.x > r.x - player.r * 0.3 &&
-      player.x < r.x + r.w + player.r * 0.3 &&
-      player.y < r.y + r.h * 0.65
-    ) {
-      endGame("win");
+    if (!mainDoorOpen) return;
+
+    if (!gameOver) {
+      const player = pucks.find((p) => p.isPlayer);
+      if (player && inDoorway(player, mainDoorRect)) endGame("win");
+    }
+
+    // A freed prisoner who makes it to the open door escapes quietly —
+    // flavor only, it doesn't affect the player's own win/lose.
+    const npc = pucks.find((p) => p.isNpc && !p.imprisoned);
+    if (npc && inDoorway(npc, mainDoorRect)) {
+      pucks = pucks.filter((p) => p !== npc);
     }
   }
 
@@ -255,9 +286,9 @@ export function createHockeyEngine({
     THROW_MOTION_SPEED = BASE.throwMotionSpeed * scale;
 
     cellW = W / GRID_COLS;
-    // Needs enough rows for the border, the corridor, and the player's
-    // starting cell to all fit (see buildLevel).
-    gridRows = Math.max(12, Math.round(H / cellW));
+    // Needs enough rows for the border, the corridor, and two bands of
+    // cells on each side to all fit (see buildLevel).
+    gridRows = Math.max(18, Math.round(H / cellW));
     cellH = H / gridRows;
 
     buildLevel();
@@ -293,15 +324,21 @@ export function createHockeyEngine({
       x, y, vx: 0, vy: 0,
       r: PUCK_R,
       isPlayer: !!isPlayer,
+      isNpc: false, // a neutral prisoner — never attacks, never destroyed
+      imprisoned: false, // locked behind an unbroken cell door: hidden, no physics
       hp: isPlayer ? PLAYER_START_HP : ENEMY_START_HP,
       grabbed: false,
     };
   }
 
   function initialLayout() {
+    const beggar = makePuck(beggarStart.x, beggarStart.y, false);
+    beggar.isNpc = true;
+    beggar.imprisoned = true;
     return [
       makePuck(playerStart.x, playerStart.y, true),
       makePuck(guardStart.x, guardStart.y, false),
+      beggar,
     ];
   }
 
@@ -362,8 +399,17 @@ export function createHockeyEngine({
     playerHitThisEnemyMove = false;
 
     // Placeholder AI: a random impulse in a random direction. Same rule as
-    // the player's throw — below throwing speed, it just doesn't move.
-    const angle = Math.random() * Math.PI * 2;
+    // the player's throw — below throwing speed, it just doesn't move. A
+    // freed prisoner isn't hostile — it's biased toward the main door
+    // instead of wandering randomly, since it's trying to escape.
+    let angle;
+    if (enemy.isNpc) {
+      const toDoorX = mainDoorRect.x + mainDoorRect.w / 2 - enemy.x;
+      const toDoorY = mainDoorRect.y + mainDoorRect.h / 2 - enemy.y;
+      angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 0.8;
+    } else {
+      angle = Math.random() * Math.PI * 2;
+    }
     const speed = MAX_THROW_SPEED * Math.random() * 0.85;
     if (speed >= THROW_MOTION_SPEED) {
       enemy.vx = Math.cos(angle) * speed;
@@ -377,7 +423,7 @@ export function createHockeyEngine({
       maybeOpenMainDoor();
       turn = "enemy";
       onTurnChange("enemy");
-      enemyQueue = pucks.filter((p) => !p.isPlayer);
+      enemyQueue = pucks.filter((p) => !p.isPlayer && !p.imprisoned);
       takeNextEnemyTurn();
     } else {
       takeNextEnemyTurn();
@@ -513,6 +559,10 @@ export function createHockeyEngine({
       if (cell.hp <= 0) {
         cellsToRemove.add(cell);
         spawnExplosion(rect.x + rect.w / 2, rect.y + rect.h / 2, Math.min(rect.w, rect.h) / 2);
+        if (cell.releases === "beggar") {
+          const beggar = pucks.find((p) => p.isNpc);
+          if (beggar) beggar.imprisoned = false;
+        }
       }
     }
 
@@ -551,7 +601,7 @@ export function createHockeyEngine({
     const cellsToRemove = new Set();
 
     for (const puck of pucks) {
-      if (puck.grabbed) continue;
+      if (puck.grabbed || puck.imprisoned) continue;
 
       puck.x += puck.vx;
       puck.y += puck.vy;
@@ -601,13 +651,16 @@ export function createHockeyEngine({
     const dist = Math.hypot(dx, dy);
     const minDist = a.r + b.r;
     if (dist === 0 || dist >= minDist) return;
+    if (a.imprisoned || b.imprisoned) return;
 
     // Combat: on the player's turn, the player's puck deals damage and
     // bounces back off the impact instead of bouncing normally. On the
     // enemy turn, the moving enemy deals one hit of damage to the player
     // and then both bounce off each other like a normal collision — an
-    // enemy hitting another enemy never deals damage either way.
-    if (a.isPlayer !== b.isPlayer) {
+    // enemy hitting another enemy never deals damage either way. A
+    // neutral prisoner is never part of combat either way, just a normal
+    // bounce like two enemies colliding.
+    if (a.isPlayer !== b.isPlayer && !a.isNpc && !b.isNpc) {
       const enemy = a.isPlayer ? b : a;
       const playerPuck = a.isPlayer ? a : b;
 
@@ -930,6 +983,9 @@ export function createHockeyEngine({
     if (puck.isPlayer) {
       grad.addColorStop(0, "#f3caa0");
       grad.addColorStop(1, "#c98f60");
+    } else if (puck.isNpc) {
+      grad.addColorStop(0, "#a89a82");
+      grad.addColorStop(1, "#6f6350");
     } else {
       grad.addColorStop(0, "#4b5b78");
       grad.addColorStop(1, "#171d29");
@@ -964,6 +1020,8 @@ export function createHockeyEngine({
 
     if (puck.isPlayer) {
       drawWitcherFace(puck, lookX, lookY);
+    } else if (puck.isNpc) {
+      drawBeggarFace(puck, lookX, lookY);
     } else {
       drawWarriorFace(puck, lookX, lookY);
     }
@@ -1172,6 +1230,129 @@ export function createHockeyEngine({
     }
   }
 
+  // The other prisoner: not a threat, just a scruffy, worried beggar with
+  // a patched headwrap, raised pleading eyebrows and a wavering mouth.
+  function drawBeggarFace(puck, lookX, lookY) {
+    const r = puck.r;
+    const eyeR = r * 0.22;
+    const eyeOffsetX = r * 0.32;
+    const eyeOffsetY = r * -0.05;
+    const eyes = [
+      { x: puck.x - eyeOffsetX, y: puck.y + eyeOffsetY },
+      { x: puck.x + eyeOffsetX, y: puck.y + eyeOffsetY },
+    ];
+
+    // patched headwrap
+    ctx.fillStyle = "#8a7358";
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.85, puck.y - r * 0.15);
+    ctx.quadraticCurveTo(puck.x - r * 0.7, puck.y - r * 0.85, puck.x, puck.y - r * 0.95);
+    ctx.quadraticCurveTo(puck.x + r * 0.7, puck.y - r * 0.85, puck.x + r * 0.85, puck.y - r * 0.15);
+    ctx.quadraticCurveTo(puck.x, puck.y - r * 0.5, puck.x - r * 0.85, puck.y - r * 0.15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.3)";
+    ctx.lineWidth = Math.max(1, r * 0.03);
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.3, puck.y - r * 0.78);
+    ctx.lineTo(puck.x - r * 0.15, puck.y - r * 0.55);
+    ctx.stroke();
+
+    // worried, raised eyebrows
+    ctx.strokeStyle = "#3a3226";
+    ctx.lineWidth = Math.max(1.5, r * 0.055);
+    ctx.lineCap = "round";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(puck.x + side * (eyeOffsetX - eyeR * 0.7), puck.y + eyeOffsetY - eyeR * 1.1);
+      ctx.lineTo(puck.x + side * (eyeOffsetX + eyeR * 1.1), puck.y + eyeOffsetY - eyeR * 0.3);
+      ctx.stroke();
+    }
+
+    // round, worried eyes
+    for (const eye of eyes) {
+      ctx.beginPath();
+      ctx.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, r * 0.025);
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(eye.x + lookX, eye.y + lookY, eyeR * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#3a2e22";
+      ctx.fill();
+    }
+
+    // stubble flecks
+    ctx.fillStyle = "rgba(70,60,48,0.4)";
+    for (let i = 0; i < 8; i++) {
+      const a = Math.PI * 0.15 + (i / 7) * Math.PI * 0.7;
+      const px = puck.x + Math.cos(a) * r * 0.55;
+      const py = puck.y + Math.sin(a) * r * 0.4 + r * 0.28;
+      ctx.beginPath();
+      ctx.arc(px, py, r * 0.02, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // small wavering, anxious mouth
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.16, puck.y + r * 0.42);
+    ctx.quadraticCurveTo(puck.x - r * 0.05, puck.y + r * 0.48, puck.x + r * 0.02, puck.y + r * 0.4);
+    ctx.quadraticCurveTo(puck.x + r * 0.1, puck.y + r * 0.46, puck.x + r * 0.18, puck.y + r * 0.4);
+    ctx.lineWidth = Math.max(1.2, r * 0.05);
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.stroke();
+  }
+
+  const HELP_CYCLE_MS = 3400;
+  const HELP_VISIBLE_MS = 1500;
+
+  function speechBubbleVisible() {
+    return performance.now() % HELP_CYCLE_MS < HELP_VISIBLE_MS;
+  }
+
+  function drawSpeechBubble(puck, text) {
+    const r = puck.r;
+    const bw = r * 2.3;
+    const bh = r * 1.05;
+    const bx = puck.x - bw / 2;
+    const by = puck.y - r * 1.85 - bh;
+    const radius = r * 0.28;
+
+    ctx.beginPath();
+    ctx.moveTo(bx + radius, by);
+    ctx.lineTo(bx + bw - radius, by);
+    ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + radius);
+    ctx.lineTo(bx + bw, by + bh - radius);
+    ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - radius, by + bh);
+    ctx.lineTo(bx + radius, by + bh);
+    ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - radius);
+    ctx.lineTo(bx, by + radius);
+    ctx.quadraticCurveTo(bx, by, bx + radius, by);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = Math.max(1, r * 0.04);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(puck.x - r * 0.16, by + bh - 1);
+    ctx.lineTo(puck.x, by + bh + r * 0.32);
+    ctx.lineTo(puck.x + r * 0.08, by + bh - 1);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fill();
+
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = `bold ${Math.round(r * 0.58)}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, bx + bw / 2, by + bh / 2 + r * 0.03);
+  }
+
   function updateExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
       explosions[i].t++;
@@ -1206,7 +1387,14 @@ export function createHockeyEngine({
 
   function render() {
     drawField();
-    for (const puck of pucks) drawPuck(puck);
+    for (const puck of pucks) {
+      if (puck.imprisoned) continue; // hidden behind its (still unbroken) door
+      drawPuck(puck);
+    }
+    if (speechBubbleVisible()) {
+      const npc = pucks.find((p) => p.isNpc);
+      if (npc) drawSpeechBubble(npc, "Help!");
+    }
     updateExplosions();
     drawExplosions();
   }
