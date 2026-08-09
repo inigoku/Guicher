@@ -122,6 +122,12 @@ export function createHockeyEngine({
   }
 
   function addWallCell(row, col, type, hp) {
+    // Two adjacent boxes can legitimately share a plain wall row/col (e.g.
+    // two stacked cells touching); avoid stacking duplicate cells there.
+    if (type === "wall") {
+      const existing = wallCells.find((c) => c.row === row && c.col === col);
+      if (existing) return existing;
+    }
     const cell = {
       row, col, type, hp: hp ?? null,
       rect: { x: col * cellW, y: row * cellH, w: cellW, h: cellH },
@@ -137,9 +143,13 @@ export function createHockeyEngine({
 
   // A 2-row-tall cell built against the left or right border wall, with a
   // breakable door on the corridor-facing side (one row of the flanking
-  // wall is the door, the other stays solid). Returns the cell's interior
-  // center and the door cell so the caller can start a puck there / tag
-  // what the door releases.
+  // wall is the door, the other stays solid). The capping wall at the top
+  // and bottom spans all three columns — including the door's own column —
+  // so the box is a fully edge-connected square: no corner is closed only
+  // diagonally, which is what let a fast puck slip through the gap between
+  // the door and the wall above it. Returns the cell's interior center and
+  // the door cell so the caller can start a puck there / tag what it
+  // releases.
   function buildSideCell(side, bottomWallRow) {
     const isLeft = side === "left";
     const innerCol = isLeft ? 1 : GRID_COLS - 2; // against the border
@@ -150,10 +160,10 @@ export function createHockeyEngine({
     const r1 = r2 - 1; // upper interior row
     const topWallRow = r1 - 1;
 
-    addWallCell(topWallRow, innerCol, "wall");
-    addWallCell(topWallRow, outerCol, "wall");
-    addWallCell(bottomWallRow, innerCol, "wall");
-    addWallCell(bottomWallRow, outerCol, "wall");
+    for (const col of [innerCol, outerCol, doorCol]) {
+      addWallCell(topWallRow, col, "wall");
+      addWallCell(bottomWallRow, col, "wall");
+    }
 
     const doorCell = addWallCell(r1, doorCol, "cellDoor", 1);
     addWallCell(r2, doorCol, "wall");
@@ -162,16 +172,18 @@ export function createHockeyEngine({
       x: (Math.min(innerCol, outerCol) * cellW + (Math.max(innerCol, outerCol) + 1) * cellW) / 2,
       y: ((r1 + r2 + 1) / 2) * cellH,
     };
-    return { center, doorCell };
+    return { center, doorCell, topWallRow, bottomWallRow };
   }
 
   // Builds the prison: four cells (two per side, lower and upper) opening
-  // onto a central corridor that leads up to the main door. The player
-  // starts locked in the lower-left cell; a beggar — not a threat, just
-  // another prisoner — is locked in the upper-right one and stays put
-  // until his own door is broken. A single guard patrols the corridor.
-  // The main door starts closed (just another wall cell) and only opens
-  // once the guard is defeated — see maybeOpenMainDoor().
+  // onto a central corridor that leads up to the main door. The two cells
+  // on the same side are stacked directly against each other, sharing the
+  // wall row between them, instead of leaving a gap. The player starts
+  // locked in the lower-left cell; a beggar — not a threat, just another
+  // prisoner — is locked in the upper-right one and stays put until his
+  // own door is broken. A single guard patrols the corridor. The main door
+  // starts closed (just another wall cell) and only opens once the guard
+  // is defeated — see maybeOpenMainDoor().
   function buildLevel() {
     wallCells = [];
 
@@ -191,23 +203,27 @@ export function createHockeyEngine({
     mainDoorRect = mainDoorCell.rect;
     mainDoorOpen = false;
 
-    // The right-side cells are offset two rows up from their left-side
-    // counterparts so a door on one side never lines up with a door/wall
-    // on the other — the corridor is always at least two cells wide.
+    // Each cell box is 3 rows tall from its own top wall row to its bottom
+    // wall row, so stacking the next box's bottomWallRow exactly 3 rows
+    // above the previous one makes them touch, sharing that wall row. The
+    // right-side pair is offset two rows from the left-side pair so a
+    // walled row on one side never lines up with the other's — the
+    // corridor stays passable throughout.
+    const BOX_SPAN = 3;
     const ROW_STAGGER = 2;
     const lowerBottomRow = gridRows - 2;
-    const upperBottomRow = Math.floor(gridRows / 2);
+    const upperBottomRow = lowerBottomRow - BOX_SPAN;
 
     const lowerLeft = buildSideCell("left", lowerBottomRow);
+    const upperLeft = buildSideCell("left", upperBottomRow); // empty cell, just flavor
     buildSideCell("right", lowerBottomRow - ROW_STAGGER); // empty cell, just flavor
-    buildSideCell("left", upperBottomRow); // empty cell, just flavor
     const upperRight = buildSideCell("right", upperBottomRow - ROW_STAGGER);
     upperRight.doorCell.releases = "beggar";
 
     playerStart = lowerLeft.center;
     beggarStart = upperRight.center;
 
-    const guardRow = Math.floor((lowerBottomRow - 4 + upperBottomRow) / 2);
+    const guardRow = Math.max(1, Math.floor(upperLeft.topWallRow / 2));
     guardStart = { x: midCol * cellW + cellW / 2, y: guardRow * cellH + cellH / 2 };
   }
 
@@ -401,14 +417,21 @@ export function createHockeyEngine({
     // Placeholder AI: a random impulse in a random direction. Same rule as
     // the player's throw — below throwing speed, it just doesn't move. A
     // freed prisoner isn't hostile — it's biased toward the main door
-    // instead of wandering randomly, since it's trying to escape.
+    // instead of wandering randomly, since it's trying to escape. A guard
+    // hunts down a freed prisoner instead of wandering randomly, if one is
+    // loose.
     let angle;
     if (enemy.isNpc) {
       const toDoorX = mainDoorRect.x + mainDoorRect.w / 2 - enemy.x;
       const toDoorY = mainDoorRect.y + mainDoorRect.h / 2 - enemy.y;
       angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 0.8;
     } else {
-      angle = Math.random() * Math.PI * 2;
+      const target = pucks.find((p) => p.isNpc && !p.imprisoned);
+      if (target) {
+        angle = Math.atan2(target.y - enemy.y, target.x - enemy.x) + (Math.random() - 0.5) * 0.8;
+      } else {
+        angle = Math.random() * Math.PI * 2;
+      }
     }
     const speed = MAX_THROW_SPEED * Math.random() * 0.85;
     if (speed >= THROW_MOTION_SPEED) {
@@ -658,8 +681,9 @@ export function createHockeyEngine({
     // enemy turn, the moving enemy deals one hit of damage to the player
     // and then both bounce off each other like a normal collision — an
     // enemy hitting another enemy never deals damage either way. A
-    // neutral prisoner is never part of combat either way, just a normal
-    // bounce like two enemies colliding.
+    // neutral prisoner is never a target for the player, but once freed a
+    // guard will still finish him off on contact (see below) — bounces
+    // like a normal collision either way.
     if (a.isPlayer !== b.isPlayer && !a.isNpc && !b.isNpc) {
       const enemy = a.isPlayer ? b : a;
       const playerPuck = a.isPlayer ? a : b;
@@ -700,6 +724,20 @@ export function createHockeyEngine({
         }
       }
       // fall through to the normal elastic bounce below
+    }
+
+    // A freed prisoner isn't safe just because he's not fighting back — a
+    // live guard still kills him on contact, same one-hit rule as any
+    // other enemy. (Imprisoned pucks never reach here, see the early
+    // return above, so this only ever fires once he's loose.)
+    const npcTarget = a.isNpc ? a : b.isNpc ? b : null;
+    const hostile = a.isNpc ? b : a;
+    if (npcTarget && !hostile.isPlayer && !hostile.isNpc && !toRemove.has(npcTarget)) {
+      npcTarget.hp -= 1;
+      if (npcTarget.hp <= 0) {
+        toRemove.add(npcTarget);
+        spawnExplosion(npcTarget.x, npcTarget.y, npcTarget.r);
+      }
     }
 
     const nx = dx / dist;
