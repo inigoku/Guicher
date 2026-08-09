@@ -416,16 +416,17 @@ export function createHockeyEngine({
 
     // Placeholder AI: a random impulse in a random direction. Same rule as
     // the player's throw — below throwing speed, it just doesn't move. A
-    // freed prisoner isn't hostile — it's biased toward the main door
-    // instead of wandering randomly, since it's trying to escape — but his
-    // aim isn't perfect, he's stumbling toward it more than walking a
-    // straight line. A guard hunts down a freed prisoner instead of
+    // freed prisoner isn't hostile — it's making a run for the main door
+    // instead of wandering randomly, and unlike everyone else it never
+    // skips a turn or holds back: full speed, every turn, so it gets out
+    // as fast as possible. A guard hunts down a freed prisoner instead of
     // wandering randomly, if one is loose.
-    let angle;
+    let angle, speed;
     if (enemy.isNpc) {
       const toDoorX = mainDoorRect.x + mainDoorRect.w / 2 - enemy.x;
       const toDoorY = mainDoorRect.y + mainDoorRect.h / 2 - enemy.y;
-      angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 2.4;
+      angle = Math.atan2(toDoorY, toDoorX) + (Math.random() - 0.5) * 0.3;
+      speed = MAX_THROW_SPEED;
     } else {
       const target = pucks.find((p) => p.isNpc && !p.imprisoned);
       if (target) {
@@ -433,8 +434,8 @@ export function createHockeyEngine({
       } else {
         angle = Math.random() * Math.PI * 2;
       }
+      speed = MAX_THROW_SPEED * Math.random() * 0.85;
     }
-    const speed = MAX_THROW_SPEED * Math.random() * 0.85;
     if (speed >= THROW_MOTION_SPEED) {
       enemy.vx = Math.cos(angle) * speed;
       enemy.vy = Math.sin(angle) * speed;
