@@ -2,8 +2,12 @@
 // Deliberately framework-agnostic — the game loop is imperative and runs
 // outside React's render cycle. A component mounts it via createHockeyEngine
 // and must call destroy() on unmount.
-import floorTileUrl from "./assets/floor-tile.webp";
-import wallBrickUrl from "./assets/wall-brick.webp";
+import floorTileUrl1 from "./assets/floor-tile-1.webp";
+import floorTileUrl2 from "./assets/floor-tile-2.webp";
+import floorTileUrl3 from "./assets/floor-tile-3.webp";
+import wallBrickUrl1 from "./assets/wall-brick-1.webp";
+import wallBrickUrl2 from "./assets/wall-brick-2.webp";
+import wallBrickUrl3 from "./assets/wall-brick-3.webp";
 
 export function createHockeyEngine({
   canvas,
@@ -16,21 +20,35 @@ export function createHockeyEngine({
 }) {
   const ctx = canvas.getContext("2d");
 
-  // Stone/brick textures (Gemini-generated), tiled one texture repeat per
-  // grid cell via pattern.setTransform. Patterns are built once the image
-  // finishes loading; drawField() falls back to a flat fill until then.
-  let floorPattern = null;
-  let wallPattern = null;
-  const floorImg = new Image();
-  floorImg.onload = () => {
-    floorPattern = ctx.createPattern(floorImg, "repeat");
-  };
-  floorImg.src = floorTileUrl;
-  const wallImg = new Image();
-  wallImg.onload = () => {
-    wallPattern = ctx.createPattern(wallImg, "repeat");
-  };
-  wallImg.src = wallBrickUrl;
+  // Several stone/brick texture variants (Gemini-generated), tiled one
+  // texture repeat per grid cell via pattern.setTransform. Each cell is
+  // randomly assigned one variant (see buildVariantMaps) for visual
+  // variety. drawField()/drawWallCell() fall back to a flat fill until a
+  // variant group finishes loading.
+  const FLOOR_URLS = [floorTileUrl1, floorTileUrl2, floorTileUrl3];
+  const WALL_URLS = [wallBrickUrl1, wallBrickUrl2, wallBrickUrl3];
+
+  const floorImages = FLOOR_URLS.map(() => new Image());
+  const floorPatterns = new Array(FLOOR_URLS.length).fill(null);
+  let floorReady = false;
+  FLOOR_URLS.forEach((url, i) => {
+    floorImages[i].onload = () => {
+      floorPatterns[i] = ctx.createPattern(floorImages[i], "repeat");
+      floorReady = floorPatterns.every(Boolean);
+    };
+    floorImages[i].src = url;
+  });
+
+  const wallImages = WALL_URLS.map(() => new Image());
+  const wallPatterns = new Array(WALL_URLS.length).fill(null);
+  let wallReady = false;
+  WALL_URLS.forEach((url, i) => {
+    wallImages[i].onload = () => {
+      wallPatterns[i] = ctx.createPattern(wallImages[i], "repeat");
+      wallReady = wallPatterns.every(Boolean);
+    };
+    wallImages[i].src = url;
+  });
 
   function tiledPattern(pattern, img, cellSizeW, cellSizeH) {
     pattern.setTransform(new DOMMatrix().scale(cellSizeW / img.naturalWidth, cellSizeH / img.naturalHeight));
@@ -82,6 +100,8 @@ export function createHockeyEngine({
   let midWallCols = [];
   let midWallRects = [];
   let floorTintMap = [];
+  let floorVariantMap = [];
+  let wallVariantMap = [];
   let PUCK_R = BASE.puckR;
   let MIN_SPEED = BASE.minSpeed;
   let MAX_THROW_SPEED = BASE.maxThrowSpeed;
@@ -116,14 +136,21 @@ export function createHockeyEngine({
     }));
   }
 
-  // Randomized once (not per-frame, or the mottling would flicker) whenever
-  // the grid is (re)built, so each floor tile gets a stable random tint.
+  // Randomized once (not per-frame, or it would flicker) whenever the grid
+  // is (re)built, so each cell gets a stable random fallback tint / texture
+  // variant.
   function buildFloorTintMap() {
     floorTintMap = [];
+    floorVariantMap = [];
+    wallVariantMap = [];
     for (let row = 0; row < gridRows; row++) {
       floorTintMap[row] = [];
+      floorVariantMap[row] = [];
+      wallVariantMap[row] = [];
       for (let col = 0; col < GRID_COLS; col++) {
         floorTintMap[row][col] = Math.floor(Math.random() * FLOOR_TINTS.length);
+        floorVariantMap[row][col] = Math.floor(Math.random() * FLOOR_URLS.length);
+        wallVariantMap[row][col] = Math.floor(Math.random() * WALL_URLS.length);
       }
     }
   }
@@ -599,8 +626,9 @@ export function createHockeyEngine({
     const x = col * cellW;
     const y = row * cellH;
 
-    if (wallPattern) {
-      ctx.fillStyle = tiledPattern(wallPattern, wallImg, cellW, cellH);
+    if (wallReady) {
+      const variant = wallVariantMap[row]?.[col] ?? 0;
+      ctx.fillStyle = tiledPattern(wallPatterns[variant], wallImages[variant], cellW, cellH);
     } else {
       // Fallback while the texture is still loading: weathered castle-stone
       // brown, with a little per-brick color variation (deterministic on
@@ -715,11 +743,17 @@ export function createHockeyEngine({
     // floor
     const floorTop = cellH;
     const floorBottom = H - cellH;
-    if (floorPattern) {
-      // The generated stone texture already has its own natural variation
-      // baked in, so it's used as-is — no extra per-tile tinting needed.
-      ctx.fillStyle = tiledPattern(floorPattern, floorImg, cellW, cellH);
-      ctx.fillRect(cellW, floorTop, W - cellW * 2, floorBottom - floorTop);
+    if (floorReady) {
+      // Each generated stone texture already has its own natural variation
+      // baked in, so a randomly assigned variant per cell is used as-is —
+      // no extra per-tile tinting needed.
+      for (let row = 1; row < gridRows - 1; row++) {
+        for (let col = 1; col < GRID_COLS - 1; col++) {
+          const variant = floorVariantMap[row]?.[col] ?? 0;
+          ctx.fillStyle = tiledPattern(floorPatterns[variant], floorImages[variant], cellW, cellH);
+          ctx.fillRect(col * cellW, row * cellH, cellW, cellH);
+        }
+      }
     } else {
       // Fallback while the texture is still loading: a flat stone gradient
       // with soft per-tile mottling — each tile is a radial gradient fading
